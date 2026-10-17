@@ -16,23 +16,48 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
+class SingleVariableDistribution(ABC):
+    """Single-variable distributions (for generating mean, variance independently)"""
+    # Intentionally different base class and generate method
+    #  from joint mixing distribution because I wanted some
+    #  cues about which type of object is being generated
+    @abstractmethod
+    def generate(self):
+        """Sample from a given distribution."""
+
+class DiscreteDistribution(SingleVariableDistribution):
+    """Discrete distribution on support_points with corresponding weights"""
+    def __init__(self,
+                 support_points,
+                 weights):
+        self.support_points = np.asarray(support_points)
+        self.weights = np.asarray(weights)
+        if not np.isclose(np.sum(self.weights), 1):
+            raise Warning(f"weights should sum to 1. weights={self.weights}")
+        if not np.shape(self.weights)==np.shape(self.support_points):
+            raise Warning(f"support_points and weights should have same shape. shape(support, weights)={self.support_points.shape}, {self.weights.shape}")
+
+class UniformDistribution(SingleVariableDistribution):
+    """Keeping future extensibility to other distributions open"""
+    def __init__(self):
+        raise NotImplementedError
+    def generate(self):
+        raise NotImplementedError
+
+
+
+#########
+# Bivariate mixing distributions for joint mean, variance
+#########
 
 class MixingDistribution(ABC):
-    """Base class for mixing distributions"""
+    """Base class for bivariate mixing distributions of mean and variance"""
     @abstractmethod
     def generate_mean_and_variance(self, rng):
         """Return tuple of arrays (mean, variance) sampled
         from the mixing distribution."""
 
-class SingleVariableDistribution(ABC):
-    # Intentionally different from generate_mean_and_variance
-    #  because I wanted some reminder about which type of
-    #  object is being generated
-    @abstractmethod
-    def generate(self):
-        """Sample from a given distribution."""
-
-class MixIndependentMeanVar(MixingDistribution):
+class MixIndependentMeanVariance(MixingDistribution):
     """Class for when mean and variance are independent"""
     def __init__(self,
                  mean_distribution: SingleVariableDistribution,
@@ -43,15 +68,10 @@ class MixIndependentMeanVar(MixingDistribution):
     def generate_mean_and_variance(self, rng):
         return (self.mean_distribution.generate(), self.var_distribution.generate())
 
-class MixPointMasses(MixIndependentMeanVar):
-    def generate_mean_and_variance(self, rng):
-        return super().generate_mean_and_variance(rng)
-    
-class Uniform(MixingDistribution):
-    def generate_mean_and_variance(self, rng):
-        raise NotImplementedError
+
 
 class GaussianMixture(ABC):
+    """Gaussian mixture from a mixing distribution"""
     def __init__(self,
                  mixing_distribution: MixingDistribution):
         self.mixing_distribution = mixing_distribution
