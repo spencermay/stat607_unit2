@@ -22,8 +22,8 @@ class SingleVariableDistribution(ABC):
     #  from joint mixing distribution because I wanted some
     #  cues about which type of object is being generated
     @abstractmethod
-    def generate(self):
-        """Sample from a given distribution."""
+    def generate(self, rng, n):
+        """Sample from the distribution n times."""
 
 class DiscreteDistribution(SingleVariableDistribution):
     """Discrete distribution on support_points with corresponding weights"""
@@ -36,6 +36,9 @@ class DiscreteDistribution(SingleVariableDistribution):
             raise Warning(f"weights should sum to 1. weights={self.weights}")
         if not np.shape(self.weights)==np.shape(self.support_points):
             raise Warning(f"support_points and weights should have same shape. shape(support, weights)={self.support_points.shape}, {self.weights.shape}")
+    
+    def generate(self, rng, n):
+        return rng.uniform(0,1, size=n)
 
 class UniformDistribution(SingleVariableDistribution):
     """Keeping future extensibility to other distributions open"""
@@ -53,9 +56,10 @@ class UniformDistribution(SingleVariableDistribution):
 class MixingDistribution(ABC):
     """Base class for bivariate mixing distributions of mean and variance"""
     @abstractmethod
-    def generate_mean_and_variance(self, rng):
+    def generate_mean_and_variance(self, rng, n) -> tuple:
         """Return tuple of arrays (mean, variance) sampled
-        from the mixing distribution."""
+        from the mixing distribution.
+        Each array has n draws of the distribution."""
 
 class MixIndependentMeanVariance(MixingDistribution):
     """Class for when mean and variance are independent"""
@@ -65,16 +69,20 @@ class MixIndependentMeanVariance(MixingDistribution):
         self.mean_distribution = mean_distribution
         self.var_distribution = var_distribution
 
-    def generate_mean_and_variance(self, rng):
-        return (self.mean_distribution.generate(), self.var_distribution.generate())
+    def generate_mean_and_variance(self, rng, n):
+        return (self.mean_distribution.generate(rng, n), self.var_distribution.generate(rng, n))
 
 
 
 class GaussianMixture(ABC):
-    """Gaussian mixture from a mixing distribution"""
+    """Gaussian mixture of a mixing distribution"""
     def __init__(self,
                  mixing_distribution: MixingDistribution):
         self.mixing_distribution = mixing_distribution
 
-    def generate(self):
-        raise NotImplementedError
+    def generate(self, rng, n, m):
+        """return an array of n trials of m draws from a gaussian of mean
+        and variance determined by the mixing distribution"""
+        mean, variance = self.mixing_distribution.generate_mean_and_variance(rng, n)
+
+        return mean.reshape((n,m)) + np.sqrt(variance.reshape(n,m)) * rng.normal(0, 1, (n,m))
