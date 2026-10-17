@@ -11,65 +11,70 @@ def solve_npmle():
     
 
 # NPMLE by Kiefer-Wolfowitz (at least as far as I can gather from the paper)
-def get_mixing_distribution_npmle(ybar, S, m, gridsize=1000):
+def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=1000, gridsize_S=1001):
     """
     Get the NPMLE estimate of the mixing distributions for the mean/variance
     """
     # First, solve for a discrete pmf approximation to the variance max-likelihood distribution
+    
+    # Shape constant for variance gamma distribution
     r = (m-1)/2
 
     # The max-likelihood mixing distribution is supported on [min(data), max(data)]
     grid_endpoints = (min(S / r), max(S / r))
     grid_start, grid_end = grid_endpoints
-    grid_locations = np.linspace(grid_start, grid_end, gridsize).reshape((gridsize, 1))
+    # The pmf for variance is supported on this grid
+    variance_grid = (np.linspace(grid_start, grid_end, num=gridsize_S)
+                     .reshape((gridsize_S, 1)))
 
-    # Make a cvxpy variable to find argmax of loglikelihood 
-    pmf_variance = cp.Variable(gridsize)
+    # Make a cvxpy variable for the pmf to find argmax of loglikelihood 
+    f_variance = cp.Variable(gridsize_S)
 
     # Compute the A matrix for the variance problem (a bunch of gamma pdfs)
-    A_variance = gamma(, ).pdf(S)
+    A_variance = gamma(r, variance_grid).pdf(S)
     
-    max_likelihood = cp.Maximize(cp.sum(cp.log(A @ pmf_variance)))
+    max_likelihood = cp.Maximize(cp.sum(cp.log(A_variance @ f_variance)))
     
-    constraints = [pmf_variance >=0, cp.sum(pmf_variance) == gridsize]
+    constraints = [f_variance >=0, cp.sum(f_variance) == gridsize_S]
     
     problem = cp.Problem(max_likelihood, constraints)
 
+    problem.solve()
 
-    A_mean = norm.pdf(np.sqrt(m) @ (ybar - ))
+    pmf_variance = f_variance.value
 
-    # The max likelihood mixing distribution is supported on [min(ybar), max(ybar)] because vibes
-    grid_endpoints = (min(ybar), max(ybar))
+
+
+    # Next, solve for a discrete pmf approximation to the *mean* max-likelihood distribution
+    
+    grid_endpoints = (min(ybar / r), max(ybar / r))
     grid_start, grid_end = grid_endpoints
+    # The pmf for variance is supported on this grid
+    mean_grid = (np.linspace(grid_start, grid_end, num=gridsize_mean)
+                 .reshape((gridsize_mean, 1)))
 
-    grid_locations = np.linspace(grid_start, grid_end, gridsize).reshape((gridsize, 1))
+    A_mean = np.sqrt(m/variance_grid) \
+                * norm.pdf(np.sqrt(m) \
+                * (ybar - mean_grid)/np.sqrt(variance_grid)) \
+                * pmf_variance
 
-    # Solve for max-likelihood pmf variance first
-    pmf_mean = cp.Variable(gridsize)
+    # Solve for max-likelihood pmf
+    f_mean = cp.Variable(gridsize_mean)
 
-
+    max_likelihood = cp.Maximize(cp.sum(cp.log(A_mean @ f_mean)))
     
-    bias_start, bias_end = bias_range
-
-    x_bias = np.linspace(bias_start, bias_end, N).reshape((N,1))
-
+    constraints = [f_mean >=0, cp.sum(f_mean) == gridsize_S]
     
-
-    # Find normal cdfs for (-cva pm x_bias) for all biases
-    norm_cdfs = norm.cdf(-cva - x_bias) + norm.cdf(-cva + x_bias)
-
-    # Initalize normed bias variable
-    bias = cp.Variable(N)
-
-    max_risk = cp.Maximize(norm_cdfs.T @ bias)
-    constraints = [bias >=0, cp.sum(bias)==1, x_bias.T @ bias == first_moment, np.square(x_bias).T @ bias == second_moment]
-
-    problem = cp.Problem(max_risk, constraints)
+    problem = cp.Problem(max_likelihood, constraints)
 
     problem.solve()
 
-    return bias.value, max_risk.value
+    pmf_mean = f_mean.value
 
+    return {"mean_grid": mean_grid,
+            "pmf_mean": pmf_mean,
+            "variance_grid": variance_grid,
+            "pmf_variance": pmf_variance}
 
 
 class BayesRuleEstimator(ABC):
