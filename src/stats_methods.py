@@ -4,7 +4,7 @@ import numpy as np
 import cvxpy as cp
 from scipy.stats import norm, gamma, t
 
-from data_generating_processes import GaussianMixture
+from data_generating_processes import GaussianMixture, MixIndependentMeanVariance, DiscreteDistribution
 
 
 # def maximize_pmf_convex(likelihood: callable,
@@ -108,7 +108,7 @@ def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=1000, gridsize_S=100
     #   (a shift), NOT the scale, so it must be passed as `scale=`.
     A_variance = gamma(r, scale=2 * variance_grid).pdf(S)
     
-    max_likelihood = cp.Maximize(cp.sum(cp.log(A_variance @ f_variance)))
+    max_likelihood = cp.Maximize(cp.sum(cp.log(A_variance.T @ f_variance)))
     
     constraints = [f_variance >=0, cp.sum(f_variance) == gridsize_S]
     
@@ -144,7 +144,7 @@ def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=1000, gridsize_S=100
     # Solve for max-likelihood pmf
     f_mean = cp.Variable(gridsize_mean)
 
-    max_likelihood = cp.Maximize(cp.sum(cp.log(A_mean @ f_mean)))
+    max_likelihood = cp.Maximize(cp.sum(cp.log(A_mean.T @ f_mean)))
     
     constraints = [f_mean >=0, cp.sum(f_mean) == gridsize_mean]
     
@@ -154,10 +154,17 @@ def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=1000, gridsize_S=100
 
     pmf_mean = f_mean.value
 
-    return {"mean_grid": mean_grid,
-            "pmf_mean": pmf_mean,
-            "variance_grid": variance_grid,
-            "pmf_variance": pmf_variance}
+    # return {"mean_grid": mean_grid,
+    #         "pmf_mean": pmf_mean,
+    #         "variance_grid": variance_grid,
+    #         "pmf_variance": pmf_variance}
+    
+    return GaussianMixture(
+            MixIndependentMeanVariance(
+             DiscreteDistribution(mean_grid, pmf_mean),
+             DiscreteDistribution(variance_grid, pmf_variance)
+            )
+           )
 
 
 class BayesRuleEstimator(ABC):
@@ -175,6 +182,103 @@ def _gaussian_pdf(x, mu, var):
     """Exact Gaussian density phi(x; mu, var) evaluated at x (no randomness)."""
     # This function was AI-generated
     return np.exp(-0.5 * (x - mu) ** 2 / var) / np.sqrt(2.0 * np.pi * var)
+
+
+
+def bayes_rule(mixing_distribution, ybar, S, m):
+    """
+    Exact oracle posterior mean E[alpha | ybar, S].
+
+    Parameters
+    ----------
+    ybar : scalar or array-like
+        Per-unit sample mean, m^{-1} sum_t y_t.
+    S : scalar or array-like
+        Per-unit deviation sum of squares, sum_t (y_t - ybar)^2. Must
+        broadcast against `ybar`.
+
+    Returns
+    -------
+    ndarray (or scalar) of E[alpha | ybar, S], matching the broadcast shape
+    of (ybar, S).
+    """
+    # Written by Claude, with my direction about what math should be happening
+    # I had to take particular pains on Proposition 2 in the paper
+
+    ybar = np.asarray(ybar, dtype=float)
+    S = np.asarray(S, dtype=float)
+
+    # Flat joint support of H: parallel arrays over joint points (alpha_j, theta_j).
+    means, variances, weights = (
+        mixing_distribution.mixing_distribution.mean_and_variance_joint_approx_pmf()
+    )
+    _means = np.asarray(means, dtype=float)
+    _variances = np.asarray(variances, dtype=float)
+    _weights = np.asarray(weights, dtype=float)
+    # Sampling variance of ybar at each joint support point.
+    _ybar_variances = _variances / m
+
+    # Distinct theta values (the variance posterior lives on these), plus a
+    # map from each joint support point to its distinct-theta index.
+    _theta_values, _theta_index = np.unique(
+        _variances, return_inverse=True
+    )
+    # Gamma parameters for S | theta: S ~ theta * chi^2_{m-1}
+    #   => Gamma(shape=(m-1)/2, scale=2*theta).
+    _gamma_shape = (m - 1) / 2.0
+    _gamma_scales = 2.0 * _theta_values  # per distinct theta
+
+    # Broadcast observations over the joint-support axis (last axis = K points).
+    x = ybar[..., None]              # (..., 1)
+    mu = _means                 # (K,)
+    var = _ybar_variances       # (K,)
+
+    # phi(ybar; alpha_j, theta_j/m) at every joint point.
+    comp_pdf = _gaussian_pdf(x, mu, var)  # (..., K)
+
+    # ---- Factor 1: E[alpha | ybar, theta_k] for each DISTINCT theta_k ----
+    # Numerator/denominator of the fixed-theta posterior mean, accumulated
+    # per distinct theta over the joint points that share that theta.
+    n_theta = len(_theta_values)
+    batch_shape = comp_pdf.shape[:-1]
+
+    num_fixed = np.zeros(batch_shape + (n_theta,))  # sum_j w_jk alpha_j phi
+    den_fixed = np.zeros(batch_shape + (n_theta,))  # sum_j w_jk phi  = f(ybar|theta_k)
+    w_phi = _weights * comp_pdf                 # (..., K)
+    np.add.at(
+        np.moveaxis(num_fixed, -1, 0),
+        _theta_index,
+        np.moveaxis(w_phi * _means, -1, 0),
+    )
+    np.add.at(
+        np.moveaxis(den_fixed, -1, 0),
+        _theta_index,
+        np.moveaxis(w_phi, -1, 0),
+    )
+    # E[alpha | ybar, theta_k]; den_fixed > 0 wherever any mass is present.
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cond_mean_alpha = num_fixed / den_fixed  # (..., n_theta)
+
+    # ---- Factor 2: posterior over theta given (ybar, S) ------------------
+    # f(ybar | theta_k) is exactly den_fixed (marginal of alpha at theta_k).
+    # f(S | theta_k) is the Gamma density on the deviation SS. Prior
+    # p(theta_k) is already baked into den_fixed via the joint weights w_jk,
+    # so the unnormalized posterior is den_fixed * Gamma(S; shape, scale_k).
+    gamma_S = gamma.pdf(
+        S[..., None], a=_gamma_shape, scale=_gamma_scales
+    )  # (..., n_theta)
+
+    post_theta_unnorm = den_fixed * gamma_S  # (..., n_theta)
+    post_norm = np.sum(post_theta_unnorm, axis=-1, keepdims=True)
+    post_theta = post_theta_unnorm / post_norm  # (..., n_theta)
+
+    # ---- Combine --------------------------------------------------------
+    # Where a theta carries no alpha mass at this ybar, cond_mean_alpha is
+    # nan but its posterior weight is 0; zero those products out safely.
+    contrib = np.where(post_theta > 0, cond_mean_alpha * post_theta, 0.0)
+    result = np.sum(contrib, axis=-1)
+    return result
+
 
 
 class OracleBayesRule(BayesRuleEstimator):
@@ -206,9 +310,11 @@ class OracleBayesRule(BayesRuleEstimator):
               * ( sum_j w_{jk} phi(ybar; alpha_j, theta_k/m) )
     normalized over the distinct theta_k.
     """
-    # This method was coded with Claude, hence the verbosity (math is verified by me though)
+    # ^^ Docstring by Claude
 
-    def __init__(self, true_dgp: GaussianMixture, m: int) -> None:
+    def __init__(self,
+                 true_dgp: GaussianMixture,
+                 m: int) -> None:
         self.true_dgp = true_dgp
         self.m = m
 
@@ -232,7 +338,7 @@ class OracleBayesRule(BayesRuleEstimator):
         self._gamma_shape = (self.m - 1) / 2.0
         self._gamma_scales = 2.0 * self._theta_values  # per distinct theta
 
-    def bayes_rule(self, ybar, S):
+    def bayes_rule(self, ybar, S, m):
         """
         Exact oracle posterior mean E[alpha | ybar, S].
 
@@ -252,60 +358,14 @@ class OracleBayesRule(BayesRuleEstimator):
         # Written by Claude, with my direction about what math should be happening
         # I had to take particular pains on Proposition 2 in the paper
 
-        ybar = np.asarray(ybar, dtype=float)
-        S = np.asarray(S, dtype=float)
-
-        # Broadcast observations over the joint-support axis (last axis = K points).
-        x = ybar[..., None]              # (..., 1)
-        mu = self._means                 # (K,)
-        var = self._ybar_variances       # (K,)
-
-        # phi(ybar; alpha_j, theta_j/m) at every joint point.
-        comp_pdf = _gaussian_pdf(x, mu, var)  # (..., K)
-
-        # ---- Factor 1: E[alpha | ybar, theta_k] for each DISTINCT theta_k ----
-        # Numerator/denominator of the fixed-theta posterior mean, accumulated
-        # per distinct theta over the joint points that share that theta.
-        n_theta = len(self._theta_values)
-        batch_shape = comp_pdf.shape[:-1]
-
-        num_fixed = np.zeros(batch_shape + (n_theta,))  # sum_j w_jk alpha_j phi
-        den_fixed = np.zeros(batch_shape + (n_theta,))  # sum_j w_jk phi  = f(ybar|theta_k)
-        w_phi = self._weights * comp_pdf                 # (..., K)
-        np.add.at(
-            np.moveaxis(num_fixed, -1, 0),
-            self._theta_index,
-            np.moveaxis(w_phi * self._means, -1, 0),
-        )
-        np.add.at(
-            np.moveaxis(den_fixed, -1, 0),
-            self._theta_index,
-            np.moveaxis(w_phi, -1, 0),
-        )
-        # E[alpha | ybar, theta_k]; den_fixed > 0 wherever any mass is present.
-        with np.errstate(invalid="ignore", divide="ignore"):
-            cond_mean_alpha = num_fixed / den_fixed  # (..., n_theta)
-
-        # ---- Factor 2: posterior over theta given (ybar, S) ------------------
-        # f(ybar | theta_k) is exactly den_fixed (marginal of alpha at theta_k).
-        # f(S | theta_k) is the Gamma density on the deviation SS. Prior
-        # p(theta_k) is already baked into den_fixed via the joint weights w_jk,
-        # so the unnormalized posterior is den_fixed * Gamma(S; shape, scale_k).
-        gamma_S = gamma.pdf(
-            S[..., None], a=self._gamma_shape, scale=self._gamma_scales
-        )  # (..., n_theta)
-
-        post_theta_unnorm = den_fixed * gamma_S  # (..., n_theta)
-        post_norm = np.sum(post_theta_unnorm, axis=-1, keepdims=True)
-        post_theta = post_theta_unnorm / post_norm  # (..., n_theta)
-
-        # ---- Combine --------------------------------------------------------
-        # Where a theta carries no alpha mass at this ybar, cond_mean_alpha is
-        # nan but its posterior weight is 0; zero those products out safely.
-        contrib = np.where(post_theta > 0, cond_mean_alpha * post_theta, 0.0)
-        result = np.sum(contrib, axis=-1)
-        return result
+        return bayes_rule(self.true_dgp, ybar=ybar, S=S, m=m)
 
 class NPMLE_BayesRule(BayesRuleEstimator):
-    def bayes_rule(self, ybar, S):
-        raise NotImplementedError
+    def bayes_rule(self, ybar, S, m, y_test, S_test, m_test):
+        """
+        Evaluate the bayes rule given data (ybar, S, m) at the
+        test point (y_test, S_test, m_test)
+        """
+        npmle_mix = get_mixing_distribution_npmle(ybar=ybar, S=S, m=m)
+
+        return bayes_rule(mixing_distribution=npmle_mix, ybar=y_test, S=S_test, m=m_test)
