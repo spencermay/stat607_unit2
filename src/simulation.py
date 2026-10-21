@@ -1,14 +1,17 @@
 """
-Run the simulation study!
+Simulation setup and data generation for the Gaussian location-scale mixture
+study.
 """
-
-import numpy as np
-import matplotlib.pyplot as plt
 
 import json
 import os
 
+import numpy as np
+
 from data_generating_processes import GaussianMixture, MixJointMeanVariance
+
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RAW_DIR = os.path.join(_PROJECT_ROOT, "results", "raw")
 
 
 def _hash_numpy(arr):
@@ -152,6 +155,16 @@ class Simulation():
                             "joint_pmf": (self.joint_pmf),
                             }
         
+    @property
+    def id(self):
+        """Stable hash identifying this simulation setup (used in filenames)."""
+        return self._id
+
+    @property
+    def descriptor(self):
+        """Dict describing this simulation setup (id, n, m, support, pmf)."""
+        return self._descriptor
+
     def generate_statistics(self, rng):
         """
         Draw one trial of n units (m observations each) and return the
@@ -169,7 +182,8 @@ class Simulation():
         y = self.dgp.generate(rng, self.n, self.m)  # (n, m)
         ybar = y.mean(axis=1)                        # (n,)
         S = ((y - ybar[:, None]) ** 2).sum(axis=1)   # (n,) deviation SS
-        _write_raw_csv(ybar, S, sim_descriptor=self._descriptor, fname=f"results/raw/raw_{self._descriptor['id']}.csv")
+        fname = os.path.join(RAW_DIR, f"raw_{self._descriptor['id']}.csv")
+        _write_raw_csv(ybar, S, sim_descriptor=self._descriptor, fname=fname)
         return ybar, S
 
 class IndependentMVSimulation(Simulation):
@@ -190,33 +204,3 @@ class IndependentMVSimulation(Simulation):
             variance_support_pts,
             joint_pmf=np.outer(mean_pmf, variance_pmf),
         )
-
-
-def make_papers_figures(simulation, seed=0):
-    rng = np.random.default_rng(seed)
-    ybar, S = simulation.generate_statistics(rng)
-
-    fig, axs = plt.subplots(3)
-
-    axs[1].hist(ybar, bins=50)
-
-    # print(simulation.mixing_distribution.means)
-
-    mix_dist = simulation.mixing_distribution
-    unique_means = np.unique(mix_dist.means)
-
-    axs[0].vlines(unique_means, ymin=0, ymax=[sum([w if m==m0 else 0 for m, w in zip(mix_dist.means, mix_dist.weights)]) for m0 in unique_means])
-
-    axs[0].vlines(ybar, ymin=-0.1, ymax=-0.01, color="black")
-
-    plt.savefig(f"results/figures/paper_figures_{simulation.id}.pdf")
-
-if __name__ == "__main__":
-    figure4_simulation = IndependentMVSimulation(
-            n=400, m=11,
-            mean_support_pts=np.array([-0.5, 1.0, 3.0]),
-            variance_support_pts=np.array([0.5, 2.0, 4.0]),
-            mean_pmf=np.full(3, 1 / 3),
-            variance_pmf=np.array([1,2,3])/6,#np.full(3, 1 / 3),
-        )
-    figure4_simulation.make_papers_figures()

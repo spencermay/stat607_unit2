@@ -64,7 +64,7 @@ from data_generating_processes import GaussianMixture, MixIndependentMeanVarianc
 
 
 # NPMLE by Kiefer-Wolfowitz (at least as far as I can gather from the paper)
-def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=1000, gridsize_S=1001):
+def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=200, gridsize_S=200):
     """
     Get the NPMLE estimate of the mixing distributions for the mean/variance.
 

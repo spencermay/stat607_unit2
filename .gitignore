@@ -2,3 +2,6 @@
 
 src/__pycache__/
 .pytest_cache/
+
+results/raw/*.csv
+results/figures/*.pdf
