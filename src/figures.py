@@ -171,7 +171,15 @@ def plot_bayes_rule_marginal_on_ybar(marginal_estimate,
     return fig, ax
 
 
-def plot_compare_oracle_npmle_marginal_ybar_bayes_rule(simulation, ybar, S, m, ax=None):
+def plot_compare_oracle_npmle_marginal_ybar_bayes_rule(
+        simulation, ybar, S, m, ax=None, npmle_estimator=None):
+    """
+    Overlay the marginal E[alpha | ybar] for the oracle, the NPMLE, and the
+    naive rule.
+
+    Pass a pre-fit `npmle_estimator` (NPMLE_BayesRule) to avoid re-solving the
+    NPMLE optimization here; if None, one is fit from (ybar, S, m).
+    """
     fig, ax = _ensure_ax(ax)
 
     oracle_estimator = OracleBayesRule(simulation.dgp, simulation.m)
@@ -181,7 +189,8 @@ def plot_compare_oracle_npmle_marginal_ybar_bayes_rule(simulation, ybar, S, m, a
                                      ax=ax,
                                     )
 
-    npmle_estimator = NPMLE_BayesRule(ybar, S=S, m=m)
+    if npmle_estimator is None:
+        npmle_estimator = NPMLE_BayesRule(ybar, S=S, m=m)
 
     plot_bayes_rule_marginal_on_ybar(marginal_estimate=lambda yb: npmle_estimator.marginal_bayes_rule(yb, simulation.m),
                                      ybar_range=(min(ybar), max(ybar)),
@@ -234,16 +243,38 @@ def figure_paper(simulation:Simulation, ybar, S, m):
     Takes the data (ybar) as an argument rather than generating it, so the
     caller controls the RNG / whether statistics are regenerated.
     """
-    fig, axs = plt.subplots(3)
+    fig, axs = plt.subplots(4)
+
+    # Fit the NPMLE ONCE and reuse it across every panel. The NPMLE solve is
+    # the expensive part (a convex optimization taking seconds); it depends
+    # only on the training data (ybar, S, m), so re-fitting per panel -- as the
+    # old code did (one bare solve for panel 0, one inside the panel-2 helper,
+    # and one inside the panel-3 contour lambda) -- repeated the identical solve
+    # 3x and was the cause of the slow figure.
+    npmle_estimator = NPMLE_BayesRule(ybar, S=S, m=m)
 
     plot_mean_pmf(simulation.mixing_distribution, ax=axs[0], pmf_color="blue")
-    plot_mean_pmf(get_mixing_distribution_npmle(ybar=ybar, S=S, m=m).mixing_distribution,ax=axs[0], pmf_color="orange")
+    plot_mean_pmf(npmle_estimator.npmle_mix.mixing_distribution, ax=axs[0], pmf_color="orange")
     plot_data_rug(ybar, ax=axs[0])
 
     plot_ybar_hist(ybar, ax=axs[1])
 
-    plot_compare_oracle_npmle_marginal_ybar_bayes_rule(simulation=simulation, ybar=ybar, S=S, m=m, ax=axs[2])
+    plot_compare_oracle_npmle_marginal_ybar_bayes_rule(
+        simulation=simulation, ybar=ybar, S=S, m=m, ax=axs[2],
+        npmle_estimator=npmle_estimator,
+    )
     plot_data_rug(ybar, ax=axs[2], ymin=-1.3, ymax=-1)
+
+    # The NPMLE mixture is pruned to its nontrivial atoms (a handful of support
+    # points), so bayes_rule's (n_grid^2, support) intermediate is small and the
+    # contour can use a fine grid.
+    plot_bayes_rule_contour_ybar_and_S(
+        lambda yb, _S: npmle_estimator.bayes_rule(yb, _S, m=m),
+        ybar_range=(min(ybar), max(ybar)),
+        S_range=(min(S), max(S)),
+        ax=axs[3],
+        n_grid=200,
+    )
 
     fig.tight_layout()
     return fig
@@ -276,3 +307,14 @@ if __name__ == "__main__":
     )
     _, out_path = make_papers_figures(figure4_simulation, seed=SEED)
     print(f"wrote {out_path}")
+
+    # bayes_rule_2d_contour_simulation = IndependentMVSimulation(
+    #     n=400,
+    #     m=11,
+    #     mean_support_pts=np.array([-0.5, 1.0, 3.0]),
+    #     variance_support_pts=np.array([0.5, 2.0, 4.0]),
+    #     mean_pmf=np.full(3, 1 / 3),
+    #     variance_pmf=np.full(3, 1 / 3),
+    # )
+    # _, out_path = make_papers_figures(figure4_simulation, seed=SEED)
+    # print(f"wrote {out_path}")

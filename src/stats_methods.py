@@ -4,7 +4,7 @@ import numpy as np
 import cvxpy as cp
 from scipy.stats import norm, gamma, t
 
-from data_generating_processes import GaussianMixture, MixIndependentMeanVariance, DiscreteDistribution
+from data_generating_processes import GaussianMixture, MixIndependentMeanVariance, MixJointMeanVariance, DiscreteDistribution
 
 
 # def maximize_pmf_convex(likelihood: callable,
@@ -93,8 +93,33 @@ def _solve_npmle_problem(problem):
     ) from last_error
 
 
+def _prune_pmf(support, pmf, prune_tol):
+    """
+    Drop negligible-mass support points from a (support, pmf) pair and
+    renormalize, returning (support, pmf) restricted to the kept atoms.
+
+    The NPMLE solution is sparse: nearly all of the gridsize support points
+    carry essentially zero mass, with the fitted distribution concentrated on a
+    few atoms. Keeping all ~gridsize points makes downstream work that scales
+    with the support size (e.g. bayes_rule building an (n_points, support)
+    array) blow up for no benefit. We keep points whose mass exceeds
+    prune_tol * max(pmf) -- a relative threshold, so it behaves the same
+    regardless of grid resolution -- then renormalize to sum to 1.
+
+    prune_tol <= 0 disables pruning.
+    """
+    support = np.asarray(support)
+    pmf = np.asarray(pmf)
+    if prune_tol <= 0:
+        return support, pmf
+    keep = pmf > prune_tol * pmf.max()
+    support, pmf = support[keep], pmf[keep]
+    return support, pmf / pmf.sum()
+
+
 # NPMLE by Kiefer-Wolfowitz (at least as far as I can gather from the paper)
-def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=200, gridsize_S=200):
+def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=200, gridsize_S=200,
+                                  prune_tol=1e-4):
     """
     Get the NPMLE estimate of the mixing distributions for the mean/variance.
 
@@ -223,12 +248,106 @@ def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=200, gridsize_S=200)
     pmf_variance = np.clip(np.asarray(pmf_variance).ravel(), 0, None)
     pmf_variance = pmf_variance / pmf_variance.sum()
 
+    # Prune negligible-mass atoms from each marginal. The NPMLE is sparse, so
+    # this collapses each ~gridsize-point grid to a handful of atoms, shrinking
+    # the joint support that downstream work (bayes_rule, contour, metrics)
+    # scales with -- with no meaningful change to the distribution.
+    mean_grid, pmf_mean = _prune_pmf(mean_grid, pmf_mean, prune_tol)
+    variance_grid, pmf_variance = _prune_pmf(variance_grid, pmf_variance, prune_tol)
+
     return GaussianMixture(
             MixIndependentMeanVariance(
              DiscreteDistribution(mean_grid, pmf_mean),
              DiscreteDistribution(variance_grid, pmf_variance)
             )
            )
+
+
+def get_joint_mixing_distribution_npmle(ybar, S, m,
+                                        gridsize_mean=40, gridsize_S=40,
+                                        prune_tol=1e-4):
+    """
+    NPMLE estimate of the JOINT mixing distribution H(alpha, theta), WITHOUT
+    assuming alpha and theta are independent.
+
+    Unlike get_mixing_distribution_npmle -- which estimates the alpha-marginal
+    and theta-marginal separately and takes their outer product (valid only
+    under independence) -- this solves one convex maximization over a single
+    joint pmf on the Cartesian grid of (alpha_k, theta_l) atoms. That joint pmf
+    need not factor, so correlated (alpha, theta) can be recovered.
+
+    Likelihood of observation i under atom (alpha_k, theta_l), using the same
+    sufficient-statistic factorization as the oracle (ybar _||_ S | theta):
+
+        L_i(k, l) = phi(ybar_i; alpha_k, theta_l / m)        # mean part
+                    * Gamma(S_i; (m-1)/2, 2 theta_l)         # variance part
+
+    We maximize sum_i log( sum_{k,l} A[i, (k,l)] f_{kl} ) over the joint simplex
+    {f >= 0, sum f = 1}. The problem has gridsize_mean * gridsize_S variables
+    (one per joint atom) and an (n, gridsize_mean*gridsize_S) likelihood matrix,
+    so it is much heavier than the two small independent solves -- hence the
+    coarser default grid. Pruning keeps the returned support small regardless.
+
+    Parameters
+    ----------
+    ybar, S, m : as in get_mixing_distribution_npmle.
+    gridsize_mean, gridsize_S : int
+        Atoms per axis; the joint grid has gridsize_mean * gridsize_S points.
+        Defaults are deliberately coarse because the joint solve scales with
+        the product.
+    prune_tol : float
+        Relative mass threshold for dropping negligible joint atoms (see
+        _prune_pmf); prune_tol <= 0 disables pruning.
+
+    Returns
+    -------
+    GaussianMixture wrapping a MixJointMeanVariance over the (pruned) joint
+    support -- a genuine joint distribution, consumed identically to the
+    independent NPMLE by bayes_rule / marginal_bayes_rule / the metrics.
+    """
+    ybar = np.asarray(ybar, dtype=float)
+    S = np.asarray(S, dtype=float)
+    r = (m - 1) / 2
+
+    # Axis grids (same endpoint conventions as the independent version).
+    mean_axis = np.linspace(min(ybar), max(ybar), gridsize_mean)
+    variance_axis = np.linspace(min(S / r), max(S / r), gridsize_S)
+
+    # Flat joint atoms in C-order: atom index p = k * gridsize_S + l maps to
+    # (mean_axis[k], variance_axis[l]). This matches the flattening used
+    # elsewhere (Simulation, MixingDistribution.mean_and_variance_joint_approx_pmf).
+    alpha_atoms = np.repeat(mean_axis, gridsize_S)          # (P,)
+    theta_atoms = np.tile(variance_axis, gridsize_mean)     # (P,)
+    n_atoms = alpha_atoms.size                              # P = K * L
+
+    # Likelihood matrix A[i, p] = L_i(atom_p), shape (N, P).
+    #   mean part: phi(ybar_i; alpha_p, theta_p/m)
+    #   var  part: Gamma(S_i; (m-1)/2, scale=2 theta_p)
+    ybar_var = theta_atoms / m                                      # (P,)
+    mean_part = norm.pdf(ybar[:, None], loc=alpha_atoms, scale=np.sqrt(ybar_var))
+    var_part = gamma.pdf(S[:, None], a=r, scale=2 * theta_atoms)    # (N, P)
+    A_joint = mean_part * var_part                                  # (N, P)
+
+    # Single joint convex maximization over the joint simplex.
+    f_joint = cp.Variable(n_atoms)
+    max_likelihood = cp.Maximize(cp.sum(cp.log(A_joint @ f_joint)))
+    constraints = [f_joint >= 0, cp.sum(f_joint) == 1]
+    problem = cp.Problem(max_likelihood, constraints)
+    _solve_npmle_problem(problem)
+
+    weights = np.clip(np.asarray(f_joint.value).ravel(), 0, None)
+    weights = weights / weights.sum()
+
+    # Prune negligible joint atoms (keep alpha/theta aligned with weights).
+    keep = weights > prune_tol * weights.max() if prune_tol > 0 else slice(None)
+    alpha_keep = alpha_atoms[keep]
+    theta_keep = theta_atoms[keep]
+    weights_keep = weights[keep]
+    weights_keep = weights_keep / weights_keep.sum()
+
+    return GaussianMixture(
+        MixJointMeanVariance(alpha_keep, theta_keep, weights_keep)
+    )
 
 
 class BayesRuleEstimator(ABC):
@@ -505,15 +624,15 @@ class NPMLE_BayesRule(BayesRuleEstimator):
         self.ybar = ybar
         self.S = S
         self.m = m
+        
+        self.npmle_mix = get_mixing_distribution_npmle(ybar=self.ybar, S=self.S, m=self.m)
 
     def bayes_rule(self, ybar, S, m):
         """
         Evaluate the bayes rule given data (ybar, S, m) at the
         test point (y_test, S_test, m_test)
         """
-        npmle_mix = get_mixing_distribution_npmle(ybar=self.ybar, S=self.S, m=self.m)
-
-        return bayes_rule(gaussian_mixture=npmle_mix, ybar=ybar, S=S, m=m)
+        return bayes_rule(gaussian_mixture=self.npmle_mix, ybar=ybar, S=S, m=m)
 
     def marginal_bayes_rule(self, ybar, m):
         """
@@ -529,6 +648,4 @@ class NPMLE_BayesRule(BayesRuleEstimator):
         estimate of H -- a property of this two-stage NPMLE, not of the
         marginalization itself.
         """
-        npmle_mix = get_mixing_distribution_npmle(ybar=self.ybar, S=self.S, m=self.m)
-
-        return marginal_bayes_rule(gaussian_mixture=npmle_mix, ybar=ybar, m=m)
+        return marginal_bayes_rule(gaussian_mixture=self.npmle_mix, ybar=ybar, m=m)

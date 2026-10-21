@@ -97,6 +97,8 @@ def mc_mse_bayes_rule(
     # independent is the point: evaluating on the training draw would measure
     # in-sample fit, which is optimistically biased for estimators that fit the
     # mixing distribution to the data (e.g. NPMLE).
+
+    # This updated method was my idea, but Claude wrote the boilerplate
     child_seeds = np.random.SeedSequence(seed).spawn(n_sim)
 
     per_draw_mse = np.empty(n_sim)
