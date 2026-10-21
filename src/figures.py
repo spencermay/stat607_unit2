@@ -19,10 +19,8 @@ import os
 
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import gamma
 
 from simulation import IndependentMVSimulation
-from stats_methods import _gaussian_pdf
 
 
 # Anchor output to the project root (parent of src/) so results land in the
@@ -133,98 +131,30 @@ def _evaluate_bayes_rule_grid(estimate, ybar_range, S_range, n_grid):
     return ybar_axis, S_axis, surface
 
 
-def make_conditional_S_density(gaussian_mixture, m):
-    """
-    Build the conditional density f(S | ybar) under a GaussianMixture DGP, for
-    use as the marginalization weight in plot_bayes_rule_marginal_on_ybar.
-
-    Since ybar _||_ S | (alpha, theta) and S | theta ~ theta * chi^2_{m-1}:
-
-        f(S | ybar) = sum_k p(theta_k | ybar) * Gamma(S; (m-1)/2, 2 theta_k)
-
-    where p(theta_k | ybar) ∝ f(ybar | theta_k) * p(theta_k) is the variance
-    posterior given ybar alone (f(ybar | theta_k) marginalizes alpha over the
-    conditional prior of alpha given theta_k).
-
-    Returns
-    -------
-    callable weight(ybar, S) -> f(S | ybar), vectorized over broadcastable
-    ``ybar`` and ``S`` (the component axis is summed internally).
-    """
-    means, variances, weights = (
-        gaussian_mixture.mixing_distribution.mean_and_variance_joint_approx_pmf()
-    )
-    means = np.asarray(means, dtype=float)
-    variances = np.asarray(variances, dtype=float)
-    weights = np.asarray(weights, dtype=float)
-
-    theta_values, theta_index = np.unique(variances, return_inverse=True)
-    ybar_variances = variances / m          # Var(ybar) per joint support point
-    gamma_shape = (m - 1) / 2.0
-    gamma_scales = 2.0 * theta_values       # S | theta ~ Gamma(shape, 2 theta)
-    n_theta = len(theta_values)
-
-    def weight(ybar, S):
-        ybar = np.asarray(ybar, dtype=float)
-        S = np.asarray(S, dtype=float)
-
-        # p(theta_k | ybar) ∝ sum_j w_jk phi(ybar; alpha_j, theta_j/m), grouped
-        # by distinct theta. Accumulate f(ybar | theta_k) per distinct theta.
-        comp_pdf = _gaussian_pdf(ybar[..., None], means, ybar_variances)  # (...,K)
-        w_phi = weights * comp_pdf                                        # (...,K)
-
-        f_ybar_given_theta = np.zeros(ybar.shape + (n_theta,))
-        np.add.at(
-            np.moveaxis(f_ybar_given_theta, -1, 0),
-            theta_index,
-            np.moveaxis(w_phi, -1, 0),
-        )
-        post_theta = f_ybar_given_theta / np.sum(
-            f_ybar_given_theta, axis=-1, keepdims=True
-        )  # (..., n_theta), p(theta_k | ybar)
-
-        # f(S | ybar) = sum_k p(theta_k | ybar) Gamma(S; shape, 2 theta_k).
-        gamma_S = gamma.pdf(
-            S[..., None], a=gamma_shape, scale=gamma_scales
-        )  # (..., n_theta)
-        return np.sum(post_theta * gamma_S, axis=-1)
-
-    return weight
-
-
-def plot_bayes_rule_marginal_on_ybar(estimate,
+def plot_bayes_rule_marginal_on_ybar(marginal_estimate,
                                      ybar_range,
-                                     S_range,
-                                     conditional_S_density,
                                      *,
                                      ax=None,
                                      n_grid=200):
     """
-    Plot the model marginal Bayes rule E[alpha | ybar] as a function of ybar.
+    Plot the marginal Bayes rule E[alpha | ybar] as a function of ybar.
+
+    S is marginalized out exactly over the discrete theta support (see
+    stats_methods.marginal_bayes_rule): no S grid, no S_range, no truncation.
+    The caller supplies that marginalized rule directly.
 
     Parameters
     ----------
-    estimate : callable
-        estimate(ybar, S) -> E[alpha | ybar, S]; see _evaluate_bayes_rule_grid.
-    ybar_range, S_range : (low, high) tuples
-    conditional_S_density : callable
-        weight(ybar, S) -> f(S | ybar), the S-marginalization weight. Use
-        make_conditional_S_density(gaussian_mixture, m) to build it from a DGP.
+    marginal_estimate : callable
+        marginal_estimate(ybar) -> E[alpha | ybar], vectorized over an array of
+        ybar values, e.g. ``lambda yb: oracle.marginal_bayes_rule(yb, m=11)``.
+    ybar_range : (low, high) tuple
+        Extent of the ybar axis to plot over.
     """
     fig, ax = _ensure_ax(ax)
 
-    ybar_axis, S_axis, surface = _evaluate_bayes_rule_grid(
-        estimate, ybar_range, S_range, n_grid
-    )
-
-    # Weights f(S_j | ybar_i): shape (n_grid, n_grid), row = ybar, col = S.
-    yb_mesh = ybar_axis[:, None]           # (n_grid, 1)
-    S_mesh = S_axis[None, :]               # (1, n_grid)
-    w = conditional_S_density(yb_mesh, S_mesh)  # (n_grid, n_grid)
-
-    # Weighted average over S (axis 1), renormalized per ybar row so the
-    # truncation to S_range doesn't change the scale.
-    marginal = np.sum(surface * w, axis=1) / np.sum(w, axis=1)
+    ybar_axis = np.linspace(ybar_range[0], ybar_range[1], n_grid)
+    marginal = np.asarray(marginal_estimate(ybar_axis))
 
     ax.plot(ybar_axis, marginal)
     ax.set_xlabel("ybar")

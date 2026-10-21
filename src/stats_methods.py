@@ -315,6 +315,67 @@ def bayes_rule(gaussian_mixture, ybar, S, m):
     return result
 
 
+def marginal_bayes_rule(gaussian_mixture, ybar, m):
+    """
+    Marginal posterior mean E[alpha | ybar], i.e. the Bayes rule for alpha
+    conditioned on ybar.
+
+    Parameters
+    ----------
+    gaussian_mixture : GaussianMixture
+        Carries the mixing distribution (joint alpha/theta support + weights).
+    ybar : scalar or array-like
+        Per-unit sample mean.
+    m : int
+        Observations per unit (sets Var(ybar) = theta / m).
+
+    Returns
+    -------
+    ndarray of E[alpha | ybar] matching the shape of `ybar`.
+    """
+    # This marginalization I implemented with claude's help
+
+    ybar = np.asarray(ybar, dtype=float)
+
+    means, variances, weights = (
+        gaussian_mixture.mixing_distribution.mean_and_variance_joint_approx_pmf()
+    )
+    _means = np.asarray(means, dtype=float)
+    _variances = np.asarray(variances, dtype=float)
+    _weights = np.asarray(weights, dtype=float)
+    _ybar_variances = _variances / m
+
+    _theta_values, _theta_index = np.unique(_variances, return_inverse=True)
+    n_theta = len(_theta_values)
+
+    comp_pdf = _gaussian_pdf(ybar[..., None], _means, _ybar_variances)  # (..., K)
+    w_phi = _weights * comp_pdf                                         # (..., K)
+
+    batch_shape = comp_pdf.shape[:-1]
+    num_fixed = np.zeros(batch_shape + (n_theta,))  # sum_j w_jk alpha_j phi
+    den_fixed = np.zeros(batch_shape + (n_theta,))  # sum_j w_jk phi = f(ybar|theta_k)
+    np.add.at(
+        np.moveaxis(num_fixed, -1, 0),
+        _theta_index,
+        np.moveaxis(w_phi * _means, -1, 0),
+    )
+    np.add.at(
+        np.moveaxis(den_fixed, -1, 0),
+        _theta_index,
+        np.moveaxis(w_phi, -1, 0),
+    )
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cond_mean_alpha = num_fixed / den_fixed  # E[alpha | ybar, theta_k]
+
+    # p(theta_k | ybar): den_fixed is f(ybar | theta_k) with the theta prior
+    # already folded in via the joint weights; normalize over theta.
+    post_theta = den_fixed / np.sum(den_fixed, axis=-1, keepdims=True)
+
+    contrib = np.where(post_theta > 0, cond_mean_alpha * post_theta, 0.0)
+    return np.sum(contrib, axis=-1)
+
+
 
 class OracleBayesRule(BayesRuleEstimator):
     """
@@ -394,6 +455,13 @@ class OracleBayesRule(BayesRuleEstimator):
         # I had to take particular pains on Proposition 2 in the paper
 
         return bayes_rule(self.true_dgp, ybar=ybar, S=S, m=m)
+
+    def marginal_bayes_rule(self, ybar, m):
+        """
+        Oracle marginal posterior mean E[alpha | ybar] (S integrated out under
+        the true DGP). See the module-level marginal_bayes_rule.
+        """
+        return marginal_bayes_rule(self.true_dgp, ybar=ybar, m=m)
 
 class NPMLE_BayesRule(BayesRuleEstimator):
     def bayes_rule(self, ybar, S, m, y_test, S_test, m_test):
