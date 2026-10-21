@@ -167,12 +167,98 @@ class NaiveEstimator(BayesRuleEstimator):
     def bayes_rule(self, ybar, S):
         return ybar
 
+def _gaussian_pdf(x, mu, var):
+    """Exact Gaussian density phi(x; mu, var) evaluated at x (no randomness)."""
+    # This function was AI-generated
+    return np.exp(-0.5 * (x - mu) ** 2 / var) / np.sqrt(2.0 * np.pi * var)
+
+
+def _gaussian_pdf_derivative(x, mu, var):
+    """
+    Exact derivative d/dx phi(x; mu, var).
+
+    For a Gaussian, phi'(x) = -((x - mu) / var) * phi(x).
+    """
+    # This function was AI-generated
+    return -((x - mu) / var) * _gaussian_pdf(x, mu, var)
+
+
 class OracleBayesRule(BayesRuleEstimator):
-    def __init__(self, true_dgp: GaussianMixture) -> None:
+    """
+    Oracle posterior-mean estimator for alpha, E[alpha | ybar], under the true
+    DGP, via Tweedie's formula:
+
+        E[alpha | ybar] = ybar + (var_ybar) * f'(ybar) / f(ybar)
+
+    where f is the marginal density of ybar. Because ybar | (alpha, theta) ~
+    N(alpha, theta/m), the marginal is a finite mixture over the joint support
+    of (alpha, theta):
+
+        f(ybar)  = sum_k w_k * phi(ybar; alpha_k, theta_k / m)
+        f'(ybar) = sum_k w_k * phi'(ybar; alpha_k, theta_k / m)
+
+    Both f and f' are evaluated exactly (closed form), so no RNG stream is
+    touched.
+
+    Heteroscedastic note: the naive single-multiplier Tweedie form
+    ``ybar + v * f'/f`` is only exact when every component shares the same
+    sampling variance. Here theta (hence theta/m) is random, so we use the
+    exact per-component identity. Within component k,
+
+        alpha_k * phi_k(ybar) = ybar * phi_k(ybar) + (theta_k/m) * phi_k'(ybar),
+
+    which follows from phi_k'(ybar) = -((ybar - alpha_k)/(theta_k/m)) phi_k.
+    Summing over the mixture gives the exact derivative-over-density form
+
+        E[alpha | ybar] = ybar + ( sum_k w_k (theta_k/m) phi_k'(ybar) ) / f(ybar),
+
+    i.e. the Tweedie correction is the variance-scaled sum of the component
+    density derivatives, divided by the marginal density.
+    """
+
+    def __init__(self, true_dgp: GaussianMixture, m: int) -> None:
         self.true_dgp = true_dgp
+        self.m = m
+        # Precompute the (fixed) joint support and weights of the mixing dist.
+        means, variances, weights = (
+            true_dgp.mixing_distribution.mean_and_variance_joint_approx_pmf()
+        )
+        self._means = np.asarray(means)
+        self._variances = np.asarray(variances)
+        self._weights = np.asarray(weights)
+        # Sampling variance of ybar for each joint support point.
+        self._ybar_variances = self._variances / self.m
 
     def bayes_rule(self, ybar, S):
-        raise NotImplementedError
+        """
+        Exact oracle posterior mean E[alpha | ybar] (S is unused: the oracle
+        marginalizes over the true variance mixing distribution rather than
+        plugging in an observed standard error).
+
+        Accepts a scalar or array-like `ybar`; returns the matching shape.
+        """
+        ybar = np.asarray(ybar, dtype=float)
+
+        # Evaluate each component's N(alpha_k, theta_k/m) density and derivative
+        # at every ybar. Broadcast ybar over the component axis.
+        x = ybar[..., None]  # shape (..., 1)
+        mu = self._means  # shape (K,)
+        var = self._ybar_variances  # shape (K,)
+
+        comp_pdf = _gaussian_pdf(x, mu, var)  # (..., K)
+        comp_pdf_deriv = _gaussian_pdf_derivative(x, mu, var)  # (..., K)
+
+        # Marginal density f(ybar) = sum_k w_k phi_k(ybar).
+        f = np.sum(self._weights * comp_pdf, axis=-1)  # (...)
+
+        # Exact Tweedie correction for heteroscedastic components:
+        #   sum_k w_k (theta_k/m) phi_k'(ybar) / f(ybar).
+        correction_numer = np.sum(
+            self._weights * var * comp_pdf_deriv, axis=-1
+        )  # (...)
+
+        result = ybar + correction_numer / f
+        return result
 
 class NPMLE_BayesRule(BayesRuleEstimator):
     def bayes_rule(self, ybar, S):

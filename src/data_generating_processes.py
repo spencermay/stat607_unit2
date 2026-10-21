@@ -25,6 +25,13 @@ class SingleVariableDistribution(ABC):
     def generate(self, rng, n):
         """Sample from the distribution n times."""
 
+    @abstractmethod
+    def approx_pmf(self):
+        """
+        An approximate pmf (exact if discrete or uniform)
+            for differentiation purposes
+        """
+
 class DiscreteDistribution(SingleVariableDistribution):
     """Discrete distribution on support_points with corresponding weights"""
     def __init__(self,
@@ -38,7 +45,19 @@ class DiscreteDistribution(SingleVariableDistribution):
             raise Warning(f"support_points and weights should have same shape. shape(support, weights)={self.support_points.shape}, {self.weights.shape}")
     
     def generate(self, rng, n):
-        return rng.uniform(0,1, size=n)
+        # Fixed this method with AI
+        # Inverse-CDF sampling from the discrete distribution
+        u = rng.uniform(0, 1, size=n)
+        cumulative = np.cumsum(self.weights)
+        indices = np.searchsorted(cumulative, u, side="right")
+        indices = np.clip(indices, 0, len(self.support_points) - 1)
+        return self.support_points[indices]
+
+    def approx_pmf(self):
+        """
+        (support_points, weights) representation of the distribution, for Tweedie's formula
+        """
+        return self.support_points, self.weights
 
 class UniformDistribution(SingleVariableDistribution):
     """Keeping future extensibility to other distributions open"""
@@ -61,6 +80,21 @@ class MixingDistribution(ABC):
         from the mixing distribution.
         Each array has n draws of the distribution."""
 
+    @abstractmethod
+    def mean_and_variance_joint_approx_pmf(self) -> tuple:
+        # This docstring was AI-generated
+        """
+        Exact/approximate joint pmf over (mean, variance) support points.
+
+        Returns
+        -------
+        tuple (means, variances, weights) where each is a 1-D array of the same
+        length; the k-th entry (means[k], variances[k]) is a joint support point
+        carrying probability mass weights[k]. This is a randomness-free
+        representation used for analytic computations (e.g. the oracle Bayes
+        rule / Tweedie formula).
+        """
+
 class MixIndependentMeanVariance(MixingDistribution):
     """Class for when mean and variance are independent"""
     def __init__(self,
@@ -71,6 +105,22 @@ class MixIndependentMeanVariance(MixingDistribution):
 
     def generate_mean_and_variance(self, rng, n):
         return (self.mean_distribution.generate(rng, n), self.var_distribution.generate(rng, n))
+
+    def mean_and_variance_joint_approx_pmf(self):
+        # This method was AI-generated
+        # Independent mean/variance => joint pmf is the outer product of the
+        # two marginal pmfs, flattened to a list of joint support points.
+        mean_support, mean_weights = self.mean_distribution.approx_pmf()
+        var_support, var_weights = self.var_distribution.approx_pmf()
+
+        mean_support = np.asarray(mean_support)
+        var_support = np.asarray(var_support)
+
+        means = np.repeat(mean_support, len(var_support))
+        variances = np.tile(var_support, len(mean_support))
+        weights = np.outer(mean_weights, var_weights).ravel()
+
+        return means, variances, weights
 
 
 
