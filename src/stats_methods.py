@@ -185,79 +185,145 @@ def _gaussian_pdf_derivative(x, mu, var):
 
 class OracleBayesRule(BayesRuleEstimator):
     """
-    Oracle posterior-mean estimator for alpha, E[alpha | ybar], under the true
-    DGP, via Tweedie's formula:
+    Oracle Bayes rule for alpha under the true DGP H(alpha, theta), conditioning
+    on the FULL sufficient statistics (ybar, S) rather than ybar alone.
 
-        E[alpha | ybar] = ybar + (var_ybar) * f'(ybar) / f(ybar)
+    Model (per unit, m draws y_t ~ N(alpha, theta)):
+        ybar = m^{-1} sum_t y_t          sufficient stat 1
+        S    = m^{-1} sum_t y_t^2        sufficient stat 2 (raw second moment)
 
-    where f is the marginal density of ybar. Because ybar | (alpha, theta) ~
-    N(alpha, theta/m), the marginal is a finite mixture over the joint support
-    of (alpha, theta):
+    Because S uses raw squares (not deviations from ybar), ybar and S are NOT
+    conditionally independent. The clean split uses the deviation sum of
+    squares
+        W = sum_t (y_t - ybar)^2 = m*S - m*ybar^2 = m*(S - ybar^2),
+    for which, given (alpha, theta),
+        ybar ~ N(alpha, theta/m),   W ~ theta * chi^2_{m-1},   ybar _||_ W,
+    and W depends on theta only (free of alpha). (ybar, S) <-> (ybar, W) is an
+    invertible transform, so conditioning on either carries the same info.
 
-        f(ybar)  = sum_k w_k * phi(ybar; alpha_k, theta_k / m)
-        f'(ybar) = sum_k w_k * phi'(ybar; alpha_k, theta_k / m)
+    Decomposition (exact, no randomness):
+        E[alpha | ybar, S] = sum_k E[alpha | ybar, theta_k] * p(theta_k | ybar, S)
 
-    Both f and f' are evaluated exactly (closed form), so no RNG stream is
-    touched.
+    Factor 1 -- posterior mean of alpha at FIXED theta_k (homoscedastic, so the
+    simple ratio-of-sums / Tweedie form is exact):
+        E[alpha | ybar, theta_k]
+            = sum_j w_{jk} alpha_j phi(ybar; alpha_j, theta_k/m)
+              / sum_j w_{jk} phi(ybar; alpha_j, theta_k/m)
+    where the sum over j runs over joint support points sharing variance
+    theta_k.
 
-    Heteroscedastic note: the naive single-multiplier Tweedie form
-    ``ybar + v * f'/f`` is only exact when every component shares the same
-    sampling variance. Here theta (hence theta/m) is random, so we use the
-    exact per-component identity. Within component k,
+    Factor 2 -- posterior over theta, using BOTH statistics (ybar _||_ W | theta):
+        p(theta_k | ybar, S)
+            ∝ f(W | theta_k) * f(ybar | theta_k)
+            = Gamma(W; shape=(m-1)/2, scale=2 theta_k)
+              * ( sum_j w_{jk} phi(ybar; alpha_j, theta_k/m) )
+    normalized over the distinct theta_k. The constant (in theta) Jacobian of
+    the (ybar, W) <-> (ybar, S) map cancels in the normalization.
 
-        alpha_k * phi_k(ybar) = ybar * phi_k(ybar) + (theta_k/m) * phi_k'(ybar),
-
-    which follows from phi_k'(ybar) = -((ybar - alpha_k)/(theta_k/m)) phi_k.
-    Summing over the mixture gives the exact derivative-over-density form
-
-        E[alpha | ybar] = ybar + ( sum_k w_k (theta_k/m) phi_k'(ybar) ) / f(ybar),
-
-    i.e. the Tweedie correction is the variance-scaled sum of the component
-    density derivatives, divided by the marginal density.
+    Everything is a finite sum over the discrete support of H, evaluated in
+    closed form, so no RNG stream is touched. This reduces to the independent
+    /ybar-only behavior exactly when H factors and S is uninformative about
+    alpha.
     """
 
     def __init__(self, true_dgp: GaussianMixture, m: int) -> None:
         self.true_dgp = true_dgp
         self.m = m
-        # Precompute the (fixed) joint support and weights of the mixing dist.
+
+        # Flat joint support of H: parallel arrays over joint points (alpha_j, theta_j).
         means, variances, weights = (
             true_dgp.mixing_distribution.mean_and_variance_joint_approx_pmf()
         )
-        self._means = np.asarray(means)
-        self._variances = np.asarray(variances)
-        self._weights = np.asarray(weights)
-        # Sampling variance of ybar for each joint support point.
+        self._means = np.asarray(means, dtype=float)
+        self._variances = np.asarray(variances, dtype=float)
+        self._weights = np.asarray(weights, dtype=float)
+        # Sampling variance of ybar at each joint support point.
         self._ybar_variances = self._variances / self.m
+
+        # Distinct theta values (the variance posterior lives on these), plus a
+        # map from each joint support point to its distinct-theta index.
+        self._theta_values, self._theta_index = np.unique(
+            self._variances, return_inverse=True
+        )
+        # Gamma parameters for W | theta: W ~ theta * chi^2_{m-1}
+        #   => Gamma(shape=(m-1)/2, scale=2*theta).
+        self._gamma_shape = (self.m - 1) / 2.0
+        self._gamma_scales = 2.0 * self._theta_values  # per distinct theta
 
     def bayes_rule(self, ybar, S):
         """
-        Exact oracle posterior mean E[alpha | ybar] (S is unused: the oracle
-        marginalizes over the true variance mixing distribution rather than
-        plugging in an observed standard error).
+        Exact oracle posterior mean E[alpha | ybar, S].
 
-        Accepts a scalar or array-like `ybar`; returns the matching shape.
+        Parameters
+        ----------
+        ybar : scalar or array-like
+            Per-unit sample mean, m^{-1} sum_t y_t.
+        S : scalar or array-like
+            Per-unit raw second moment, m^{-1} sum_t y_t^2. Must broadcast
+            against `ybar`.
+
+        Returns
+        -------
+        ndarray (or scalar) of E[alpha | ybar, S], matching the broadcast shape
+        of (ybar, S).
         """
         ybar = np.asarray(ybar, dtype=float)
+        S = np.asarray(S, dtype=float)
 
-        # Evaluate each component's N(alpha_k, theta_k/m) density and derivative
-        # at every ybar. Broadcast ybar over the component axis.
-        x = ybar[..., None]  # shape (..., 1)
-        mu = self._means  # shape (K,)
-        var = self._ybar_variances  # shape (K,)
+        # Deviation sum of squares recovered from (ybar, S): W = m (S - ybar^2).
+        # Clip tiny negatives from float error; W is nonnegative by construction.
+        W = self.m * (S - ybar**2)
+        W = np.maximum(W, 0.0)
 
+        # Broadcast observations over the joint-support axis (last axis = K points).
+        x = ybar[..., None]              # (..., 1)
+        mu = self._means                 # (K,)
+        var = self._ybar_variances       # (K,)
+
+        # phi(ybar; alpha_j, theta_j/m) at every joint point.
         comp_pdf = _gaussian_pdf(x, mu, var)  # (..., K)
-        comp_pdf_deriv = _gaussian_pdf_derivative(x, mu, var)  # (..., K)
 
-        # Marginal density f(ybar) = sum_k w_k phi_k(ybar).
-        f = np.sum(self._weights * comp_pdf, axis=-1)  # (...)
+        # ---- Factor 1: E[alpha | ybar, theta_k] for each DISTINCT theta_k ----
+        # Numerator/denominator of the fixed-theta posterior mean, accumulated
+        # per distinct theta over the joint points that share that theta.
+        n_theta = len(self._theta_values)
+        batch_shape = comp_pdf.shape[:-1]
 
-        # Exact Tweedie correction for heteroscedastic components:
-        #   sum_k w_k (theta_k/m) phi_k'(ybar) / f(ybar).
-        correction_numer = np.sum(
-            self._weights * var * comp_pdf_deriv, axis=-1
-        )  # (...)
+        num_fixed = np.zeros(batch_shape + (n_theta,))  # sum_j w_jk alpha_j phi
+        den_fixed = np.zeros(batch_shape + (n_theta,))  # sum_j w_jk phi  = f(ybar|theta_k)
+        w_phi = self._weights * comp_pdf                 # (..., K)
+        np.add.at(
+            np.moveaxis(num_fixed, -1, 0),
+            self._theta_index,
+            np.moveaxis(w_phi * self._means, -1, 0),
+        )
+        np.add.at(
+            np.moveaxis(den_fixed, -1, 0),
+            self._theta_index,
+            np.moveaxis(w_phi, -1, 0),
+        )
+        # E[alpha | ybar, theta_k]; den_fixed > 0 wherever any mass is present.
+        with np.errstate(invalid="ignore", divide="ignore"):
+            cond_mean_alpha = num_fixed / den_fixed  # (..., n_theta)
 
-        result = ybar + correction_numer / f
+        # ---- Factor 2: posterior over theta given (ybar, S) ------------------
+        # f(ybar | theta_k) is exactly den_fixed (marginal of alpha at theta_k).
+        # f(W | theta_k) is the Gamma density. Prior p(theta_k) is already baked
+        # into den_fixed via the joint weights w_jk, so the unnormalized posterior
+        # is den_fixed * Gamma(W; shape, scale_k).
+        gamma_W = gamma.pdf(
+            W[..., None], a=self._gamma_shape, scale=self._gamma_scales
+        )  # (..., n_theta)
+
+        post_theta_unnorm = den_fixed * gamma_W  # (..., n_theta)
+        post_norm = np.sum(post_theta_unnorm, axis=-1, keepdims=True)
+        post_theta = post_theta_unnorm / post_norm  # (..., n_theta)
+
+        # ---- Combine --------------------------------------------------------
+        # Where a theta carries no alpha mass at this ybar, cond_mean_alpha is
+        # nan but its posterior weight is 0; zero those products out safely.
+        contrib = np.where(post_theta > 0, cond_mean_alpha * post_theta, 0.0)
+        result = np.sum(contrib, axis=-1)
         return result
 
 class NPMLE_BayesRule(BayesRuleEstimator):

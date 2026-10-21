@@ -123,6 +123,60 @@ class MixIndependentMeanVariance(MixingDistribution):
         return means, variances, weights
 
 
+class MixJointMeanVariance(MixingDistribution):
+    """
+    General (possibly correlated) discrete joint distribution H(alpha, theta).
+
+    The joint mixing distribution is specified directly as a list of joint
+    support points (means[k], variances[k]) each carrying probability mass
+    weights[k]. This covers the case where mean and variance are NOT
+    independent (the independent case is just the special case where the
+    weights factor as an outer product).
+
+    Parameters
+    ----------
+    means : array-like, shape (K,)
+        alpha-coordinate of each joint support point.
+    variances : array-like, shape (K,)
+        theta-coordinate of each joint support point. Must be strictly
+        positive.
+    weights : array-like, shape (K,)
+        Probability mass on each support point; must be nonnegative and sum
+        to 1.
+    """
+    
+    def __init__(self, means, variances, weights):
+        self.means = np.asarray(means, dtype=float)
+        self.variances = np.asarray(variances, dtype=float)
+        self.weights = np.asarray(weights, dtype=float)
+
+        if not (self.means.shape == self.variances.shape == self.weights.shape):
+            raise ValueError(
+                "means, variances, weights must share the same shape; got "
+                f"{self.means.shape}, {self.variances.shape}, {self.weights.shape}"
+            )
+        if self.means.ndim != 1:
+            raise ValueError("means, variances, weights must be 1-D arrays")
+        if np.any(self.variances <= 0):
+            raise ValueError("all variances (theta) must be strictly positive")
+        if np.any(self.weights < 0):
+            raise ValueError("weights must be nonnegative")
+        if not np.isclose(np.sum(self.weights), 1):
+            raise ValueError(f"weights must sum to 1; got {np.sum(self.weights)}")
+
+    def generate_mean_and_variance(self, rng, n):
+        # Inverse-CDF sampling over the joint support (single uniform stream,
+        # one draw per unit, so a correlated (alpha, theta) pair is drawn
+        # jointly rather than from two independent streams).
+        u = rng.uniform(0, 1, size=n)
+        cumulative = np.cumsum(self.weights)
+        indices = np.searchsorted(cumulative, u, side="right")
+        indices = np.clip(indices, 0, len(self.weights) - 1)
+        return self.means[indices], self.variances[indices]
+
+    def mean_and_variance_joint_approx_pmf(self):
+        return self.means, self.variances, self.weights
+
 
 class GaussianMixture(ABC):
     """Gaussian mixture of a mixing distribution"""
