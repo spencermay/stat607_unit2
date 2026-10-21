@@ -18,7 +18,7 @@ setup: .venv/.deps-installed
 simulate: setup
 	.venv/bin/python src/simulation.py
 
-figures: figures
+figures:
 	.venv/bin/python src/figures.py
 
 test: setup

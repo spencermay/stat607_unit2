@@ -532,6 +532,43 @@ def marginal_bayes_rule(gaussian_mixture, ybar, m):
     return np.sum(contrib, axis=-1)
 
 
+def marginal_ybar_density(gaussian_mixture, ybar, m):
+    """
+    Marginal density of ybar implied by a mixing distribution, f(ybar).
+
+    ybar is a mixture over the joint support of (alpha, theta): given an atom
+    (alpha_k, theta_k), ybar ~ N(alpha_k, theta_k / m), so
+
+        f(ybar) = sum_k w_k * phi(ybar; alpha_k, theta_k / m).
+
+    This is the density to overlay on a (density-normalized) histogram of the
+    observed ybar -- the pushforward of the mixing distribution through the
+    sampling model, NOT the density of alpha itself.
+
+    Parameters
+    ----------
+    gaussian_mixture : GaussianMixture
+        Carries the mixing distribution (joint alpha/theta support + weights).
+    ybar : scalar or array-like
+        Points at which to evaluate the density.
+    m : int
+        Observations per unit (sets Var(ybar) = theta / m).
+
+    Returns
+    -------
+    ndarray of f(ybar) matching the shape of `ybar`.
+    """
+    ybar = np.asarray(ybar, dtype=float)
+    means, variances, weights = (
+        gaussian_mixture.mixing_distribution.mean_and_variance_joint_approx_pmf()
+    )
+    means = np.asarray(means, dtype=float)
+    variances = np.asarray(variances, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+
+    comp_pdf = _gaussian_pdf(ybar[..., None], means, variances / m)  # (..., K)
+    return np.sum(weights * comp_pdf, axis=-1)
+
 
 class OracleBayesRule(BayesRuleEstimator):
     """

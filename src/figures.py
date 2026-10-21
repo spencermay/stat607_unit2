@@ -24,6 +24,7 @@ from stats_methods import (
                 OracleBayesRule,
                 NPMLE_BayesRule,
                 get_mixing_distribution_npmle,
+                marginal_ybar_density,
                 NaiveEstimator
                 )
 from simulation import IndependentMVSimulation, Simulation
@@ -65,7 +66,7 @@ def save_figure(fig, name, sim_id):
 
 # --- individual panels (plot_*) --------------------------------------------
 
-def plot_mean_pmf(mixing_distribution, *, ax=None, pmf_color="blue"):
+def plot_mean_pmf(mixing_distribution, *, ax=None, pmf_color="blue", label=None):
     """
     Stem plot of the marginal pmf of alpha (the mean mixing distribution),
     collapsing the joint support onto its distinct mean values.
@@ -82,9 +83,11 @@ def plot_mean_pmf(mixing_distribution, *, ax=None, pmf_color="blue"):
     # Total mass on each distinct mean (sum weights of joint points sharing it).
     mass = np.array([weights[np.isclose(means, mu)].sum() for mu in unique_means])
 
-    ax.vlines(unique_means, ymin=0, ymax=mass, color=pmf_color)
-    ax.set_ylabel("P(alpha)")
-    ax.set_xlabel("alpha")
+    ax.vlines(unique_means, ymin=0, ymax=mass, color=pmf_color, label=label)
+    ax.set_ylabel("P($\\alpha$)")
+    ax.set_xlabel("$\\alpha$")
+    if label is not None:
+        ax.legend(loc="upper left", fontsize="small")
     return fig, ax
 
 
@@ -95,12 +98,35 @@ def plot_data_rug(ybar, *, ax=None, ymin=-0.1, ymax=-0.01, color="black"):
     return fig, ax
 
 
-def plot_ybar_hist(ybar, *, ax=None, bins=50):
-    """Histogram of the observed per-unit means ybar."""
+def plot_ybar_hist(ybar, *, ax=None, bins=50, density=True):
+    """Histogram of the observed per-unit means ybar.
+
+    density=True normalizes the histogram to a probability density (area = 1)
+    so marginal-density curves f(ybar) can be overlaid directly on the same
+    scale.
+    """
     fig, ax = _ensure_ax(ax)
-    ax.hist(ybar, bins=bins)
-    ax.set_xlabel("ybar")
-    ax.set_ylabel("count")
+    ax.hist(ybar, bins=bins, density=density)
+    ax.set_xlabel("$\\overline{y}$")
+    ax.set_ylabel("Density" if density else "Count")
+    return fig, ax
+
+
+def plot_ybar_density(gaussian_mixture, m, ybar_range, *, ax=None,
+                      n_grid=400, color=None, label=None):
+    """
+    Overlay the marginal density of ybar implied by a mixing distribution,
+    f(ybar) = sum_k w_k phi(ybar; alpha_k, theta_k/m), as a line.
+
+    Draw on top of a density-normalized plot_ybar_hist so the curve and the
+    histogram share the same (density) scale.
+    """
+    fig, ax = _ensure_ax(ax)
+    grid = np.linspace(ybar_range[0], ybar_range[1], n_grid)
+    dens = marginal_ybar_density(gaussian_mixture, grid, m)
+    ax.plot(grid, dens, color=color, label=label, linewidth=2)
+    if label is not None:
+        ax.legend(loc="upper left", fontsize="small")
     return fig, ax
 
 def _evaluate_bayes_rule_grid(estimate, ybar_range, S_range, n_grid):
@@ -144,7 +170,8 @@ def plot_bayes_rule_marginal_on_ybar(marginal_estimate,
                                      ybar_range,
                                      *,
                                      ax=None,
-                                     n_grid=200):
+                                     n_grid=200,
+                                     label=None):
     """
     Plot the marginal Bayes rule E[alpha | ybar] as a function of ybar.
 
@@ -165,9 +192,11 @@ def plot_bayes_rule_marginal_on_ybar(marginal_estimate,
     ybar_axis = np.linspace(ybar_range[0], ybar_range[1], n_grid)
     marginal = np.asarray(marginal_estimate(ybar_axis))
 
-    ax.plot(ybar_axis, marginal)
-    ax.set_xlabel("ybar")
-    ax.set_ylabel("E[alpha | ybar]")
+    ax.plot(ybar_axis, marginal, label=label)
+    ax.set_xlabel("$\\bar{y}$")
+    ax.set_ylabel("E[$\\alpha$ | $\\overline{y}$]")
+    if label is not None:
+        ax.legend(loc="upper left", fontsize="small")
     return fig, ax
 
 
@@ -186,7 +215,7 @@ def plot_compare_oracle_npmle_marginal_ybar_bayes_rule(
 
     plot_bayes_rule_marginal_on_ybar(marginal_estimate=lambda yb: oracle_estimator.marginal_bayes_rule(yb, simulation.m),
                                      ybar_range=(min(ybar), max(ybar)),
-                                     ax=ax,
+                                     ax=ax, label="Oracle Bayes Rule",
                                     )
 
     if npmle_estimator is None:
@@ -194,14 +223,14 @@ def plot_compare_oracle_npmle_marginal_ybar_bayes_rule(
 
     plot_bayes_rule_marginal_on_ybar(marginal_estimate=lambda yb: npmle_estimator.marginal_bayes_rule(yb, simulation.m),
                                      ybar_range=(min(ybar), max(ybar)),
-                                     ax=ax,
+                                     ax=ax, label="NPMLE Bayes Rule"
                                     )
 
     naive_estimator = NaiveEstimator()
     
     plot_bayes_rule_marginal_on_ybar(marginal_estimate=lambda x:x,
                                         ybar_range=(min(ybar), max(ybar)),
-                                        ax=ax,
+                                        ax=ax, label="Naive Bayes Rule ($\\hat{\\alpha}=\\overline{y}$)"
                                     )
 
     return fig, ax
@@ -276,7 +305,7 @@ def plot_support_points_ybar_and_S(means, variances, weights, color, label,
             s=sizes, facecolors="none", edgecolors=color,
             linewidths=1.6, label=label, zorder=3,
         )
-    ax.legend(loc="best", fontsize="small")
+    ax.legend(loc="upper left", fontsize="small")
     return fig, ax
 
 def plot_bayes_rule_contour_ybar_and_S(estimate,
@@ -297,8 +326,8 @@ def plot_bayes_rule_contour_ybar_and_S(estimate,
 
     # contourf expects Z indexed [row=y, col=x]; put S on the y-axis, ybar on x.
     cs = ax.contourf(ybar_axis, S_axis, surface.T, levels=20)
-    fig.colorbar(cs, ax=ax, label="E[alpha | ybar, S]")
-    ax.set_xlabel("ybar")
+    fig.colorbar(cs, ax=ax, label="E[$\\alpha$ | $\\overline{y}$, S]")
+    ax.set_xlabel("$\\overline{y}$")
     ax.set_ylabel("S")
     return fig, ax
 
@@ -333,7 +362,7 @@ def plot_contours_and_mixing_support(npmle_estimator: NPMLE_BayesRule,
 
     plot_support_points_ybar_and_S(
         *npmle_mvw, color="tab:orange",
-        label=f"NPMLE ({'alpha indep. theta' if npmle_estimator.assume_independent_mv else 'joint alpha, theta'})",
+        label=f"NPMLE ({'$\\alpha$ indep. $\\theta$' if npmle_estimator.assume_independent_mv else 'joint $\\alpha$, $\\theta$'})",
         m=m, ax=ax, max_weight=shared_max_w,
     )
 
@@ -368,17 +397,29 @@ def figure_paper(simulation:Simulation, ybar, S, m):
     # 3x and was the cause of the slow figure.
     npmle_estimator = NPMLE_BayesRule(ybar, S=S, m=m)
 
-    plot_mean_pmf(simulation.mixing_distribution, ax=axs[0], pmf_color="blue")
-    plot_mean_pmf(npmle_estimator.npmle_mix.mixing_distribution, ax=axs[0], pmf_color="orange")
-    plot_data_rug(ybar, ax=axs[0])
+    plot_mean_pmf(simulation.mixing_distribution, ax=axs[0], pmf_color="blue", label="True pmf of $\\alpha$")
+    plot_mean_pmf(npmle_estimator.npmle_mix.mixing_distribution, ax=axs[0], pmf_color="orange", label="NPMLE pmf of $\\alpha$")
+    plot_data_rug(ybar, ax=axs[0], ymin=-0.05, ymax=-0.01)
 
-    plot_ybar_hist(ybar, ax=axs[1])
+    # Density-scaled histogram of ybar, with the implied marginal densities
+    # f(ybar) overlaid: the oracle (true DGP mixing distribution) and the NPMLE
+    # fit. Colors match panel 0 (blue = true, orange = NPMLE).
+    plot_ybar_hist(ybar, ax=axs[1], density=True)
+    ybar_range = (min(ybar), max(ybar))
+    plot_ybar_density(
+        simulation.dgp, m, ybar_range, ax=axs[1],
+        color="blue", label="Oracle density $f(\\overline{y})$",
+    )
+    plot_ybar_density(
+        npmle_estimator.npmle_mix, m, ybar_range, ax=axs[1],
+        color="orange", label="NPMLE density $\\hat{f}(\\overline{y})$",
+    )
 
     plot_compare_oracle_npmle_marginal_ybar_bayes_rule(
         simulation=simulation, ybar=ybar, S=S, m=m, ax=axs[2],
-        npmle_estimator=npmle_estimator,
+        npmle_estimator=npmle_estimator
     )
-    plot_data_rug(ybar, ax=axs[2], ymin=-1.3, ymax=-1)
+    plot_data_rug(ybar, ax=axs[2], ymin=-1.5, ymax=-1)
 
 
     fig.tight_layout()
