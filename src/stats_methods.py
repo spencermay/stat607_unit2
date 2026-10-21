@@ -123,16 +123,39 @@ def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=1000, gridsize_S=100
     # Next, solve for a discrete pmf approximation to the *mean* max-likelihood distribution
     
     
-    grid_endpoints = (min(ybar / r), max(ybar / r))
+    grid_endpoints = (min(ybar), max(ybar))
     grid_start, grid_end = grid_endpoints
     # The pmf for variance is supported on this grid
     mean_grid = (np.linspace(grid_start, grid_end, num=gridsize_mean)
                  .reshape((gridsize_mean, 1)))
 
-    A_mean = np.sqrt(m/variance_grid) \
-                * norm.pdf(np.sqrt(m) \
-                * (ybar - mean_grid)/np.sqrt(variance_grid)) \
-                * pmf_variance
+    # A_mean[k, i] = f(ybar_i | alpha_k), the likelihood of the i-th observed
+    # mean under mean grid point alpha_k = mean_grid[k], marginalized over the
+    # (already estimated) variance mixing distribution:
+    #
+    #   f(ybar_i | alpha_k) = sum_j pmf_variance[j]
+    #                          * phi(ybar_i; alpha_k, theta_j / m)
+    #
+    # with theta_j = variance_grid[j] and
+    #   phi(ybar; alpha, theta/m) = sqrt(m/theta) * norm.pdf(sqrt(m)(ybar-alpha)/sqrt(theta)).
+    #
+    # Three axes are involved -- mean grid (k), variance grid (j), data (i) --
+    # so we build the (k, j, i) tensor and contract (sum) over the variance
+    # axis j. Grids are stored as (gridsize, 1) columns; flatten them here and
+    # place each quantity on its own axis via broadcasting.
+    alpha_k = mean_grid.reshape(gridsize_mean, 1, 1)       # (K, 1, 1)
+    theta_j = variance_grid.reshape(1, gridsize_S, 1)      # (1, J, 1)
+    ybar_i = np.asarray(ybar).reshape(1, 1, -1)            # (1, 1, N)
+    pmf_var_j = np.asarray(pmf_variance).reshape(1, gridsize_S, 1)  # (1, J, 1)
+
+    component = (
+        np.sqrt(m / theta_j)
+        * norm.pdf(np.sqrt(m) * (ybar_i - alpha_k) / np.sqrt(theta_j))
+    )  # (K, J, N) = phi(ybar_i; alpha_k, theta_j/m)
+
+    # Marginalize over the variance grid -> (K, N), matching A_variance's
+    # (grid x data) orientation so A_mean.T @ f_mean below is unchanged.
+    A_mean = np.sum(pmf_var_j * component, axis=1)  # (K, N)
 
     # use the t-statistic pivot strategy proposed in the paper
     # Note: I think neither is actually fully justified!!!
@@ -154,11 +177,19 @@ def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=1000, gridsize_S=100
 
     pmf_mean = f_mean.value
 
-    # return {"mean_grid": mean_grid,
-    #         "pmf_mean": pmf_mean,
-    #         "variance_grid": variance_grid,
-    #         "pmf_variance": pmf_variance}
-    
+    # The cvxpy problems constrain sum(f) == gridsize (not 1), and the solver
+    # can return tiny negatives, so normalize into proper pmfs before handing
+    # them to DiscreteDistribution (which requires nonnegative weights summing
+    # to 1). Also flatten grids/pmfs to 1-D so their shapes match (grids are
+    # built as (gridsize, 1) columns; pmfs come back as (gridsize,)).
+    mean_grid = np.asarray(mean_grid).ravel()
+    variance_grid = np.asarray(variance_grid).ravel()
+
+    pmf_mean = np.clip(np.asarray(pmf_mean).ravel(), 0, None)
+    pmf_mean = pmf_mean / pmf_mean.sum()
+    pmf_variance = np.clip(np.asarray(pmf_variance).ravel(), 0, None)
+    pmf_variance = pmf_variance / pmf_variance.sum()
+
     return GaussianMixture(
             MixIndependentMeanVariance(
              DiscreteDistribution(mean_grid, pmf_mean),
