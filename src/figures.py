@@ -24,6 +24,7 @@ from stats_methods import (
                 OracleBayesRule,
                 NPMLE_BayesRule,
                 get_mixing_distribution_npmle,
+                NaiveEstimator
                 )
 from simulation import IndependentMVSimulation, Simulation
 
@@ -64,7 +65,7 @@ def save_figure(fig, name, sim_id):
 
 # --- individual panels (plot_*) --------------------------------------------
 
-def plot_mean_pmf(mixing_distribution, *, ax=None):
+def plot_mean_pmf(mixing_distribution, *, ax=None, pmf_color="blue"):
     """
     Stem plot of the marginal pmf of alpha (the mean mixing distribution),
     collapsing the joint support onto its distinct mean values.
@@ -81,7 +82,7 @@ def plot_mean_pmf(mixing_distribution, *, ax=None):
     # Total mass on each distinct mean (sum weights of joint points sharing it).
     mass = np.array([weights[np.isclose(means, mu)].sum() for mu in unique_means])
 
-    ax.vlines(unique_means, ymin=0, ymax=mass)
+    ax.vlines(unique_means, ymin=0, ymax=mass, color=pmf_color)
     ax.set_ylabel("P(alpha)")
     ax.set_xlabel("alpha")
     return fig, ax
@@ -187,6 +188,13 @@ def plot_compare_oracle_npmle_marginal_ybar_bayes_rule(simulation, ybar, S, m, a
                                      ax=ax,
                                     )
 
+    naive_estimator = NaiveEstimator()
+    
+    plot_bayes_rule_marginal_on_ybar(marginal_estimate=lambda x:x,
+                                        ybar_range=(min(ybar), max(ybar)),
+                                        ax=ax,
+                                    )
+
     return fig, ax
 
 
@@ -219,16 +227,17 @@ def plot_bayes_rule_contour_ybar_and_S(estimate,
 def figure_paper(simulation:Simulation, ybar, S, m):
     """
     Reproduce the paper-style multi-panel figure:
-      panel 0: true mean pmf (stems) with a rug of the observed ybar beneath,
+      panel 0: mean pmf (stems) with a rug of the observed ybar beneath,
       panel 1: histogram of ybar.
+      panel 2: bayes rule with a rug of observed ybar beneath
 
     Takes the data (ybar) as an argument rather than generating it, so the
     caller controls the RNG / whether statistics are regenerated.
     """
     fig, axs = plt.subplots(3)
 
-    plot_mean_pmf(simulation.mixing_distribution, ax=axs[0])
-    plot_mean_pmf(get_mixing_distribution_npmle(ybar=ybar, S=S, m=m).mixing_distribution,ax=axs[0])
+    plot_mean_pmf(simulation.mixing_distribution, ax=axs[0], pmf_color="blue")
+    plot_mean_pmf(get_mixing_distribution_npmle(ybar=ybar, S=S, m=m).mixing_distribution,ax=axs[0], pmf_color="orange")
     plot_data_rug(ybar, ax=axs[0])
 
     plot_ybar_hist(ybar, ax=axs[1])
@@ -245,14 +254,18 @@ def make_papers_figures(simulation, seed=0):
     Draw one trial from `simulation`, build the paper
     figure, save it, and return (fig, path).
     """
-    rng = np.random.default_rng(seed)
-    ybar, S = simulation.generate_statistics(rng)
+    ybar, S = simulation.generate_statistics(seed)
     fig = figure_paper(simulation, ybar, S=S, m=simulation.m)
-    path = save_figure(fig, "paper_figures", simulation.id)
+    # Encode both the setup id and the seed so figures from different draws of
+    # the same setup don't overwrite each other.
+    path = save_figure(fig, "paper_figures", f"{simulation.id}_seed{seed}")
     return fig, path
 
 
 if __name__ == "__main__":
+
+    SEED = 0
+
     figure4_simulation = IndependentMVSimulation(
         n=400,
         m=11,
@@ -261,5 +274,5 @@ if __name__ == "__main__":
         mean_pmf=np.full(3, 1 / 3),
         variance_pmf=np.full(3, 1 / 3),
     )
-    _, out_path = make_papers_figures(figure4_simulation)
+    _, out_path = make_papers_figures(figure4_simulation, seed=SEED)
     print(f"wrote {out_path}")

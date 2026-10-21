@@ -190,8 +190,7 @@ def test_npmle_solver_returns_valid_mixture():
         mean_pmf=np.full(3, 1 / 3),
         variance_pmf=np.full(3, 1 / 3),
     )
-    rng = np.random.default_rng(7)
-    ybar, S = sim.generate_statistics(rng)
+    ybar, S = sim.generate_statistics(seed=7)
 
     mix = get_mixing_distribution_npmle(ybar, S, M, gridsize_mean=200, gridsize_S=201)
     assert isinstance(mix, GaussianMixture)
@@ -220,12 +219,11 @@ def test_npmle_bayes_rule_runs_and_is_finite():
         mean_pmf=np.full(3, 1 / 3),
         variance_pmf=np.full(3, 1 / 3),
     )
-    rng = np.random.default_rng(3)
-    ybar, S = sim.generate_statistics(rng)
+    ybar, S = sim.generate_statistics(seed=3)
 
-    est = NPMLE_BayesRule().bayes_rule(
-        ybar=ybar, S=S, m=M, y_test=ybar, S_test=S, m_test=M
-    )
+    # Fit on the training data (constructor), evaluate at test points.
+    estimator = NPMLE_BayesRule(ybar=ybar, S=S, m=M)
+    est = estimator.bayes_rule(ybar=ybar, S=S, m=M)
     est = np.asarray(est)
     assert est.shape == ybar.shape
     assert np.all(np.isfinite(est))
@@ -251,8 +249,7 @@ def test_simulation_builds_dgp_and_statistics():
     assert np.isclose(sim.joint_pmf.sum(), 1.0)
     assert sim.joint_pmf.shape == (3, 3)
 
-    rng = np.random.default_rng(0)
-    ybar, S = sim.generate_statistics(rng)
+    ybar, S = sim.generate_statistics(seed=0)
     assert ybar.shape == (50,)
     assert S.shape == (50,)
     assert np.all(S >= 0)  # deviation sum of squares is nonnegative
@@ -321,12 +318,11 @@ def test_npmle_marginal_runs_across_seeds():
             mean_pmf=np.full(3, 1 / 3),
             variance_pmf=np.full(3, 1 / 3),
         )
-        rng = np.random.default_rng(seed)
-        ybar, S = sim.generate_statistics(rng)
+        ybar, S = sim.generate_statistics(seed=seed)
 
-        marg = NPMLE_BayesRule().marginal_bayes_rule(
-            ybar=ybar, S=S, m=M, y_test=y_test, m_test=M
-        )
+        # Fit on training data (constructor), evaluate the marginal at test ybar.
+        estimator = NPMLE_BayesRule(ybar=ybar, S=S, m=M)
+        marg = estimator.marginal_bayes_rule(ybar=y_test, m=M)
         marg = np.asarray(marg)
         assert marg.shape == y_test.shape, f"seed {seed}: bad shape {marg.shape}"
         assert np.all(np.isfinite(marg)), f"seed {seed}: non-finite output"

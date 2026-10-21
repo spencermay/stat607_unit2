@@ -3,6 +3,7 @@ Simulation setup and data generation for the Gaussian location-scale mixture
 study.
 """
 
+import hashlib
 import json
 import os
 
@@ -14,8 +15,24 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RAW_DIR = os.path.join(_PROJECT_ROOT, "results", "raw")
 
 
-def _hash_numpy(arr):
-    return hash((arr.tobytes(), arr.shape, arr.dtype))
+def _stable_sim_id(n, m, *arrays):
+    """
+    Deterministic content hash for a simulation setup, stable across processes.
+
+    Python's builtin hash() salts bytes/str with a per-interpreter random seed
+    (PEP 456 hash randomization), so hash(arr.tobytes()) changes every run even
+    for identical inputs -- unsuitable for a persistent id in a filename. We use
+    hashlib instead, folding in n, m and each array's bytes + shape + dtype.
+    Returns a short hex string.
+    """
+    h = hashlib.blake2b(digest_size=8)
+    h.update(repr((int(n), int(m))).encode())
+    for arr in arrays:
+        arr = np.ascontiguousarray(arr)
+        h.update(str(arr.dtype).encode())
+        h.update(repr(arr.shape).encode())
+        h.update(arr.tobytes())
+    return h.hexdigest()
 
 
 def _descriptor_to_json(sim_descriptor):
@@ -146,7 +163,12 @@ class Simulation():
         )
         self.dgp = GaussianMixture(self.mixing_distribution)
 
-        self._id = hash((n,m,_hash_numpy(self.mean_support_pts), _hash_numpy(self.variance_support_pts), _hash_numpy(self.joint_pmf)))
+        self._id = _stable_sim_id(
+            n, m,
+            self.mean_support_pts,
+            self.variance_support_pts,
+            self.joint_pmf,
+        )
         self._descriptor = {"id": self._id,
                             "n": n,
                             "m": m,
@@ -165,10 +187,20 @@ class Simulation():
         """Dict describing this simulation setup (id, n, m, support, pmf)."""
         return self._descriptor
 
-    def generate_statistics(self, rng):
+    def generate_statistics(self, seed):
         """
         Draw one trial of n units (m observations each) and return the
         sufficient statistics used by the estimators.
+
+        Parameters
+        ----------
+        seed : int
+            Seed for this draw. A fresh Generator is built from it internally,
+            so the draw is fully reproducible from (setup, seed). The seed is
+            part of the dataset's identity: it is recorded in the descriptor
+            and the raw-CSV filename (raw_<setup id>_seed<seed>.csv), so draws
+            from the same setup with different seeds are saved side by side
+            rather than overwriting one another.
 
         Returns
         -------
@@ -179,11 +211,18 @@ class Simulation():
             (S | theta ~ theta * chi^2_{m-1}, the convention the NPMLE and the
             oracle Bayes rule expect.)
         """
+        rng = np.random.default_rng(seed)
         y = self.dgp.generate(rng, self.n, self.m)  # (n, m)
         ybar = y.mean(axis=1)                        # (n,)
         S = ((y - ybar[:, None]) ** 2).sum(axis=1)   # (n,) deviation SS
-        fname = os.path.join(RAW_DIR, f"raw_{self._descriptor['id']}.csv")
-        _write_raw_csv(ybar, S, sim_descriptor=self._descriptor, fname=fname)
+
+        # The setup id identifies the DGP setup; the seed identifies this
+        # particular draw. Record both so repeated draws don't collide.
+        descriptor = {**self._descriptor, "seed": int(seed)}
+        fname = os.path.join(
+            RAW_DIR, f"raw_{self._id}_seed{int(seed)}.csv"
+        )
+        _write_raw_csv(ybar, S, sim_descriptor=descriptor, fname=fname)
         return ybar, S
 
 class IndependentMVSimulation(Simulation):
