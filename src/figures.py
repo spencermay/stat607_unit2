@@ -206,34 +206,41 @@ def plot_compare_oracle_npmle_marginal_ybar_bayes_rule(
 
     return fig, ax
 
-def plot_support_points_ybar_and_S(means, variances, weights, colorscale, label,
-                                   m, *, ax=None):
+def plot_support_points_ybar_and_S(means, variances, weights, color, label,
+                                   m, *, ax=None, max_weight=None, filled=True):
     """
     Scatter the support of a mixing distribution onto the (ybar, S) plane,
-    colored by atom weight, to overlay on the Bayes-rule contour.
+    using ONE fixed color per series and marker AREA proportional to each
+    atom's weight, to overlay on the Bayes-rule contour.
 
-    The support lives in (alpha, theta) space, but the plot axes are
-    (ybar, S). We map each atom there via the mean of its sufficient statistics:
-      * alpha -> ybar axis directly (ybar is an unbiased estimate of alpha), and
+    Encoding rationale: two support sets (e.g. NPMLE vs true) are overlaid, so
+    color is used for SERIES IDENTITY (one color each) and SIZE for weight.
+    Sizes use a shared absolute scale (via `max_weight`) so equal marker areas
+    mean equal probability mass across both series -- directly comparable,
+    unlike per-series colormaps.
+
+    Coordinate mapping: the support lives in (alpha, theta) but the axes are
+    (ybar, S). Each atom is placed via the mean of its sufficient statistics:
+      * alpha -> ybar axis directly (ybar is an unbiased estimate of alpha),
       * theta -> S axis at E[S | theta] = (m - 1) * theta, since
-        S | theta ~ Gamma((m-1)/2, 2 theta) has mean (m-1) * theta.
-    So an atom sits at the (ybar, S) location its units are expected to produce.
+        S | theta ~ Gamma((m-1)/2, 2 theta) has mean (m - 1) * theta.
 
     Parameters
     ----------
     means, variances, weights : array-like, shape (K,)
         Joint support atoms (alpha, theta) and their probability mass.
-    colorscale : str
-        A matplotlib colormap name (e.g. "Oranges", "magenta") for shading by
-        weight. Common short names like "orange-red"/"magenta" are mapped to
-        matplotlib colormaps.
+    color : matplotlib color
+        A single color identifying this series (e.g. "tab:orange").
     label : str
         Legend label for this support set.
     m : int
         Observations per unit, for the theta -> E[S|theta] = (m-1) theta mapping.
     ax : matplotlib Axes, optional
-        Axes to draw on (should be the contour's axes so the support overlays
-        it). A new figure/axes is made if None.
+        Axes to draw on (the contour's axes, so the support overlays it).
+    max_weight : float, optional
+        Weight that maps to the largest marker. Pass the SAME value for every
+        series on a shared axes so sizes are comparable; defaults to this
+        series' own max (only correct when one series is drawn).
     """
     fig, ax = _ensure_ax(ax)
 
@@ -245,19 +252,30 @@ def plot_support_points_ybar_and_S(means, variances, weights, colorscale, label,
     x = means
     y = (m - 1) * variances
 
-    # Short aliases -> real matplotlib colormaps.
-    cmap = {
-        "orange-red": "Oranges",
-        "magenta": "spring",
-    }.get(colorscale, colorscale)
+    if max_weight is None:
+        max_weight = weights.max()
 
-    scatter = ax.scatter(
-        x, y,
-        c=weights, cmap=cmap,
-        s=30 + 300 * (weights / weights.max()),  # size also tracks weight
-        edgecolors="black", linewidths=0.4,
-        label=label, zorder=3,
-    )
+    # Marker AREA proportional to weight on a shared scale; a small floor keeps
+    # tiny atoms visible.
+    MAX_AREA = 400.0
+    sizes = 15.0 + MAX_AREA * (weights / max_weight)
+
+    if filled:
+        # Solid markers (e.g. the estimate). Drawn above the hollow series.
+        ax.scatter(
+            x, y,
+            s=sizes, color=color,
+            edgecolors="black", linewidths=0.5,
+            alpha=0.85, label=label, zorder=4,
+        )
+    else:
+        # Hollow outline markers (e.g. the truth) so a filled series underneath
+        # stays visible where atoms coincide -- avoids occlusion.
+        ax.scatter(
+            x, y,
+            s=sizes, facecolors="none", edgecolors=color,
+            linewidths=1.6, label=label, zorder=3,
+        )
     ax.legend(loc="best", fontsize="small")
     return fig, ax
 
@@ -306,21 +324,23 @@ def plot_contours_and_mixing_support(npmle_estimator: NPMLE_BayesRule,
     )
 
     npmle_mvw = npmle_estimator.npmle_mix.mixing_distribution.mean_and_variance_joint_approx_pmf()
+    true_mvw = simulation.mixing_distribution.mean_and_variance_joint_approx_pmf()
 
-    # Overlay the support atoms on the SAME contour axes (pass ax), mapping
-    # (alpha, theta) into (ybar, S) via m. Orange scale to contrast with the
-    # contour's default (blue/green) scale.
+    # Shared size scale across both series so equal marker areas mean equal
+    # probability mass. Fixed, distinct colors identify the series; marker size
+    # encodes weight.
+    shared_max_w = max(np.max(npmle_mvw[2]), np.max(true_mvw[2]))
+
     plot_support_points_ybar_and_S(
-        *npmle_mvw, colorscale="orange-red",
-        label=f"NPMLE Mixing Distribution ({'Assuming alpha _||_ theta' if npmle_estimator.assume_independent_mv else 'Jointly fit for alpha, theta'})",
-        m=m, ax=ax,
+        *npmle_mvw, color="tab:orange",
+        label=f"NPMLE ({'alpha indep. theta' if npmle_estimator.assume_independent_mv else 'joint alpha, theta'})",
+        m=m, ax=ax, max_weight=shared_max_w,
     )
 
     plot_support_points_ybar_and_S(
-        *simulation.mixing_distribution.mean_and_variance_joint_approx_pmf(),
-        colorscale="magenta",
-        label="True Mixing Distribution",
-        m=m, ax=ax,
+        *true_mvw, color="black",
+        label="True mixing distribution",
+        m=m, ax=ax, max_weight=shared_max_w, filled=False,
     )
 
     return fig, ax
