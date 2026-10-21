@@ -185,12 +185,16 @@ def _gaussian_pdf(x, mu, var):
 
 
 
-def bayes_rule(mixing_distribution, ybar, S, m):
+def bayes_rule(gaussian_mixture, ybar, S, m):
     """
     Exact oracle posterior mean E[alpha | ybar, S].
 
     Parameters
     ----------
+    gaussian_mixture : GaussianMixture
+        Carries the (true or estimated) mixing distribution whose joint support
+        (alpha_j, theta_j, w_j) drives the Bayes rule, accessed via
+        gaussian_mixture.mixing_distribution.mean_and_variance_joint_approx_pmf().
     ybar : scalar or array-like
         Per-unit sample mean, m^{-1} sum_t y_t.
     S : scalar or array-like
@@ -210,7 +214,7 @@ def bayes_rule(mixing_distribution, ybar, S, m):
 
     # Flat joint support of H: parallel arrays over joint points (alpha_j, theta_j).
     means, variances, weights = (
-        mixing_distribution.mixing_distribution.mean_and_variance_joint_approx_pmf()
+        gaussian_mixture.mixing_distribution.mean_and_variance_joint_approx_pmf()
     )
     _means = np.asarray(means, dtype=float)
     _variances = np.asarray(variances, dtype=float)
@@ -368,4 +372,4 @@ class NPMLE_BayesRule(BayesRuleEstimator):
         """
         npmle_mix = get_mixing_distribution_npmle(ybar=ybar, S=S, m=m)
 
-        return bayes_rule(mixing_distribution=npmle_mix, ybar=y_test, S=S_test, m=m_test)
+        return bayes_rule(gaussian_mixture=npmle_mix, ybar=y_test, S=S_test, m=m_test)

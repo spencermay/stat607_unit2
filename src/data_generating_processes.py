@@ -178,15 +178,23 @@ class MixJointMeanVariance(MixingDistribution):
         return self.means, self.variances, self.weights
 
 
-class GaussianMixture(ABC):
+class GaussianMixture:
     """Gaussian mixture of a mixing distribution"""
     def __init__(self,
                  mixing_distribution: MixingDistribution):
         self.mixing_distribution = mixing_distribution
 
     def generate(self, rng, n, m):
-        """return an array of n trials of m draws from a gaussian of mean
-        and variance determined by the mixing distribution"""
+        """return an (n, m) array: n units, each with m draws from a Gaussian
+        whose (mean, variance) is a single draw from the mixing distribution.
+
+        Each unit i draws one (alpha_i, theta_i); its m observations are
+        alpha_i + sqrt(theta_i) * N(0, 1). mean/variance are length-n, so they
+        broadcast over the m columns via an added trailing axis.
+        """
         mean, variance = self.mixing_distribution.generate_mean_and_variance(rng, n)
 
-        return mean.reshape((n,m)) + np.sqrt(variance.reshape(n,m)) * rng.normal(0, 1, (n,m))
+        mean = np.asarray(mean).reshape(n, 1)
+        variance = np.asarray(variance).reshape(n, 1)
+
+        return mean + np.sqrt(variance) * rng.normal(0, 1, (n, m))
