@@ -206,7 +206,60 @@ def plot_compare_oracle_npmle_marginal_ybar_bayes_rule(
 
     return fig, ax
 
+def plot_support_points_ybar_and_S(means, variances, weights, colorscale, label,
+                                   m, *, ax=None):
+    """
+    Scatter the support of a mixing distribution onto the (ybar, S) plane,
+    colored by atom weight, to overlay on the Bayes-rule contour.
 
+    The support lives in (alpha, theta) space, but the plot axes are
+    (ybar, S). We map each atom there via the mean of its sufficient statistics:
+      * alpha -> ybar axis directly (ybar is an unbiased estimate of alpha), and
+      * theta -> S axis at E[S | theta] = (m - 1) * theta, since
+        S | theta ~ Gamma((m-1)/2, 2 theta) has mean (m-1) * theta.
+    So an atom sits at the (ybar, S) location its units are expected to produce.
+
+    Parameters
+    ----------
+    means, variances, weights : array-like, shape (K,)
+        Joint support atoms (alpha, theta) and their probability mass.
+    colorscale : str
+        A matplotlib colormap name (e.g. "Oranges", "magenta") for shading by
+        weight. Common short names like "orange-red"/"magenta" are mapped to
+        matplotlib colormaps.
+    label : str
+        Legend label for this support set.
+    m : int
+        Observations per unit, for the theta -> E[S|theta] = (m-1) theta mapping.
+    ax : matplotlib Axes, optional
+        Axes to draw on (should be the contour's axes so the support overlays
+        it). A new figure/axes is made if None.
+    """
+    fig, ax = _ensure_ax(ax)
+
+    means = np.asarray(means, dtype=float)
+    variances = np.asarray(variances, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+
+    # Map atoms into (ybar, S) coordinates (see docstring).
+    x = means
+    y = (m - 1) * variances
+
+    # Short aliases -> real matplotlib colormaps.
+    cmap = {
+        "orange-red": "Oranges",
+        "magenta": "spring",
+    }.get(colorscale, colorscale)
+
+    scatter = ax.scatter(
+        x, y,
+        c=weights, cmap=cmap,
+        s=30 + 300 * (weights / weights.max()),  # size also tracks weight
+        edgecolors="black", linewidths=0.4,
+        label=label, zorder=3,
+    )
+    ax.legend(loc="best", fontsize="small")
+    return fig, ax
 
 def plot_bayes_rule_contour_ybar_and_S(estimate,
                                        ybar_range,
@@ -231,6 +284,48 @@ def plot_bayes_rule_contour_ybar_and_S(estimate,
     ax.set_ylabel("S")
     return fig, ax
 
+def plot_contours_and_mixing_support(npmle_estimator: NPMLE_BayesRule,
+                                     simulation: Simulation,
+                                     ybar,
+                                     S,
+                                     m,
+                                     ax=None):
+    """
+    Display bayes rule contours and the support of the mean/variance joint distribution.
+    """
+    
+    # The NPMLE mixture is pruned to its nontrivial atoms (a handful of support
+    # points), so bayes_rule's (n_grid^2, support) intermediate is small and the
+    # contour can use a fine grid.
+    fig, ax = plot_bayes_rule_contour_ybar_and_S(
+        lambda yb, _S: npmle_estimator.bayes_rule(yb, _S, m=m),
+        ybar_range=(min(ybar), max(ybar)),
+        S_range=(min(S), max(S)),
+        ax=ax,
+        n_grid=50,
+    )
+
+    npmle_mvw = npmle_estimator.npmle_mix.mixing_distribution.mean_and_variance_joint_approx_pmf()
+
+    # Overlay the support atoms on the SAME contour axes (pass ax), mapping
+    # (alpha, theta) into (ybar, S) via m. Orange scale to contrast with the
+    # contour's default (blue/green) scale.
+    plot_support_points_ybar_and_S(
+        *npmle_mvw, colorscale="orange-red",
+        label=f"NPMLE Mixing Distribution ({'Assuming alpha _||_ theta' if npmle_estimator.assume_independent_mv else 'Jointly fit for alpha, theta'})",
+        m=m, ax=ax,
+    )
+
+    plot_support_points_ybar_and_S(
+        *simulation.mixing_distribution.mean_and_variance_joint_approx_pmf(),
+        colorscale="magenta",
+        label="True Mixing Distribution",
+        m=m, ax=ax,
+    )
+
+    return fig, ax
+
+
 # --- composite figures (figure_*) ------------------------------------------
 
 def figure_paper(simulation:Simulation, ybar, S, m):
@@ -243,7 +338,7 @@ def figure_paper(simulation:Simulation, ybar, S, m):
     Takes the data (ybar) as an argument rather than generating it, so the
     caller controls the RNG / whether statistics are regenerated.
     """
-    fig, axs = plt.subplots(4)
+    fig, axs = plt.subplots(3, sharex=True)
 
     # Fit the NPMLE ONCE and reuse it across every panel. The NPMLE solve is
     # the expensive part (a convex optimization taking seconds); it depends
@@ -265,16 +360,36 @@ def figure_paper(simulation:Simulation, ybar, S, m):
     )
     plot_data_rug(ybar, ax=axs[2], ymin=-1.3, ymax=-1)
 
-    # The NPMLE mixture is pruned to its nontrivial atoms (a handful of support
-    # points), so bayes_rule's (n_grid^2, support) intermediate is small and the
-    # contour can use a fine grid.
-    plot_bayes_rule_contour_ybar_and_S(
-        lambda yb, _S: npmle_estimator.bayes_rule(yb, _S, m=m),
-        ybar_range=(min(ybar), max(ybar)),
-        S_range=(min(S), max(S)),
-        ax=axs[3],
-        n_grid=200,
-    )
+
+    fig.tight_layout()
+    return fig
+
+
+# Additional figure
+def figure_contours(simulation:Simulation, seed):
+    fig, axs = plt.subplots(2, sharex=True)
+
+    ybar, S = simulation.generate_statistics(seed)
+    m = simulation.m
+
+    npmle_estimator = NPMLE_BayesRule(ybar, S=S, m=m, assume_independent_mv=True)
+
+    plot_contours_and_mixing_support(npmle_estimator=npmle_estimator,
+                                     simulation=simulation,
+                                     ybar=ybar,
+                                     S=S,
+                                     m=m,
+                                     ax=axs[0])
+
+    
+    npmle_estimator = NPMLE_BayesRule(ybar, S=S, m=m, assume_independent_mv=False)
+
+    plot_contours_and_mixing_support(npmle_estimator=npmle_estimator,
+                                     simulation=simulation,
+                                     ybar=ybar,
+                                     S=S,
+                                     m=m,
+                                     ax=axs[1])
 
     fig.tight_layout()
     return fig
@@ -286,11 +401,15 @@ def make_papers_figures(simulation, seed=0):
     figure, save it, and return (fig, path).
     """
     ybar, S = simulation.generate_statistics(seed)
-    fig = figure_paper(simulation, ybar, S=S, m=simulation.m)
-    # Encode both the setup id and the seed so figures from different draws of
-    # the same setup don't overwrite each other.
+    fig = figure_paper(simulation, ybar, S, simulation.m)
     path = save_figure(fig, "paper_figures", f"{simulation.id}_seed{seed}")
     return fig, path
+
+def make_contour_figure(simulation, seed=0):
+    fig = figure_contours(simulation, seed)
+    path = save_figure(fig, "contour_figure", f"{simulation.id}_seed{seed}")
+    return fig, path
+
 
 
 if __name__ == "__main__":
@@ -308,13 +427,31 @@ if __name__ == "__main__":
     _, out_path = make_papers_figures(figure4_simulation, seed=SEED)
     print(f"wrote {out_path}")
 
-    # bayes_rule_2d_contour_simulation = IndependentMVSimulation(
-    #     n=400,
-    #     m=11,
-    #     mean_support_pts=np.array([-0.5, 1.0, 3.0]),
-    #     variance_support_pts=np.array([0.5, 2.0, 4.0]),
-    #     mean_pmf=np.full(3, 1 / 3),
-    #     variance_pmf=np.full(3, 1 / 3),
-    # )
-    # _, out_path = make_papers_figures(figure4_simulation, seed=SEED)
-    # print(f"wrote {out_path}")
+    # --- Correlated (alpha, theta) DGP for the contour / joint-NPMLE figure ---
+    # Correlation is encoded by a joint pmf that does NOT factor as an outer
+    # product. Here mass sits on the diagonal of the (alpha, theta) grid, so
+    # small alpha pairs with small theta and large alpha with large theta
+    # (positive dependence) -- something only the JOINT NPMLE can recover; the
+    # independent fit forces Cov(alpha, theta) = 0. We use the base Simulation
+    # directly (IndependentMVSimulation only accepts factorized marginals).
+    mean_support = np.array([-0.5, 1.0, 3.0])
+    variance_support = np.array([0.5, 2.0, 4.0])
+    # joint_pmf[i, j] = P(alpha = mean_support[i], theta = variance_support[j]).
+    # Diagonal-heavy -> positive correlation; small off-diagonal mass keeps the
+    # support fully explored and both marginals non-degenerate.
+    correlated_joint_pmf = np.array([
+        [0.28, 0.04, 0.01],   # alpha = -0.5 mostly with theta = 0.5
+        [0.04, 0.25, 0.04],   # alpha =  1.0 mostly with theta = 2.0
+        [0.01, 0.04, 0.29],   # alpha =  3.0 mostly with theta = 4.0
+    ])
+    correlated_joint_pmf = correlated_joint_pmf / correlated_joint_pmf.sum()
+
+    correlated_simulation = Simulation(
+        n=400,
+        m=11,
+        mean_support_pts=mean_support,
+        variance_support_pts=variance_support,
+        joint_pmf=correlated_joint_pmf,
+    )
+    _, out_path = make_contour_figure(correlated_simulation, seed=SEED)
+    print(f"wrote {out_path}")

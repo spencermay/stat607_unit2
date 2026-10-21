@@ -28,6 +28,7 @@ from stats_methods import (
     NaiveEstimator,
     NPMLE_BayesRule,
     get_mixing_distribution_npmle,
+    get_joint_mixing_distribution_npmle,
     bayes_rule,
     marginal_bayes_rule,
     _gaussian_pdf,
@@ -326,3 +327,66 @@ def test_npmle_marginal_runs_across_seeds():
         marg = np.asarray(marg)
         assert marg.shape == y_test.shape, f"seed {seed}: bad shape {marg.shape}"
         assert np.all(np.isfinite(marg)), f"seed {seed}: non-finite output"
+
+
+# --- joint NPMLE (correlated alpha, theta) ---------------------------------
+
+def _cov_alpha_theta(mixing_distribution):
+    """Cov(alpha, theta) under a mixing distribution's joint pmf."""
+    a, t, w = mixing_distribution.mean_and_variance_joint_approx_pmf()
+    a, t, w = np.asarray(a), np.asarray(t), np.asarray(w)
+    return float(np.sum(w * a * t) - np.sum(w * a) * np.sum(w * t))
+
+
+def _draw_correlated(seed, n=400, m=M):
+    """Draw (ybar, S) from a POSITIVELY correlated joint DGP (large alpha paired
+    with large theta), returning also the true Cov(alpha, theta)."""
+    dgp, means, variances, weights = make_correlated_dgp()
+    rng = np.random.default_rng(seed)
+    y, _alpha, _theta = dgp.generate(rng, n, m, return_latents=True)
+    ybar = y.mean(axis=1)
+    S = ((y - ybar[:, None]) ** 2).sum(axis=1)
+    true_cov = (
+        np.sum(weights * means * variances)
+        - np.sum(weights * means) * np.sum(weights * variances)
+    )
+    return ybar, S, float(true_cov)
+
+
+def test_joint_npmle_returns_joint_mixture():
+    """The joint NPMLE returns a MixJointMeanVariance over a nonempty support."""
+    ybar, S, _ = _draw_correlated(0)
+    mix = get_joint_mixing_distribution_npmle(ybar, S, M)
+    assert isinstance(mix, GaussianMixture)
+    assert isinstance(mix.mixing_distribution, MixJointMeanVariance)
+    a, t, w = mix.mixing_distribution.mean_and_variance_joint_approx_pmf()
+    assert len(a) == len(t) == len(w) >= 1
+    assert np.isclose(np.sum(w), 1.0)
+
+
+@pytest.mark.slow
+def test_joint_npmle_recovers_positive_correlation():
+    """
+    On a positively-correlated DGP, the joint NPMLE recovers positive
+    Cov(alpha, theta), while the independent NPMLE cannot (its outer-product
+    construction forces Cov == 0 regardless of the data).
+    """
+    for seed in range(3):
+        ybar, S, true_cov = _draw_correlated(seed)
+        assert true_cov > 0  # sanity: the DGP really is positively correlated
+
+        joint_mix = get_joint_mixing_distribution_npmle(ybar, S, M)
+        joint_cov = _cov_alpha_theta(joint_mix.mixing_distribution)
+
+        indep_mix = get_mixing_distribution_npmle(ybar, S, M)
+        indep_cov = _cov_alpha_theta(indep_mix.mixing_distribution)
+
+        # Joint fit picks up the positive dependence...
+        assert joint_cov > 0.1, (
+            f"seed {seed}: joint Cov={joint_cov:.3f} should be clearly positive"
+        )
+        # ...and does so far better than the independent fit, which is ~0.
+        assert abs(indep_cov) < 1e-6, (
+            f"seed {seed}: independent Cov={indep_cov:.2e} should be ~0"
+        )
+        assert joint_cov > indep_cov

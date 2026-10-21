@@ -620,12 +620,16 @@ class OracleBayesRule(BayesRuleEstimator):
         return marginal_bayes_rule(self.true_dgp, ybar=ybar, m=m)
 
 class NPMLE_BayesRule(BayesRuleEstimator):
-    def __init__(self, ybar, S, m):
+    def __init__(self, ybar, S, m, assume_independent_mv=True):
         self.ybar = ybar
         self.S = S
         self.m = m
-        
-        self.npmle_mix = get_mixing_distribution_npmle(ybar=self.ybar, S=self.S, m=self.m)
+        self.assume_independent_mv = assume_independent_mv
+
+        if assume_independent_mv:
+            self.npmle_mix = get_mixing_distribution_npmle(ybar=self.ybar, S=self.S, m=self.m)
+        else:
+            self.npmle_mix = get_joint_mixing_distribution_npmle(ybar=self.ybar, S=self.S, m=self.m)
 
     def bayes_rule(self, ybar, S, m):
         """
