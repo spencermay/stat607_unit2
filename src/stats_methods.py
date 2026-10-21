@@ -200,9 +200,9 @@ def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=200, gridsize_S=200)
 
 class BayesRuleEstimator(ABC):
     @abstractmethod
-    def bayes_rule(self, ybar, S) -> tuple:
-        """Compute the Bayes rule for (mean,variance) given
-        ybar and standard error for n samples of a Gaussian mixture"""
+    def bayes_rule(self, ybar, S) -> np.ndarray:
+        """Compute the Bayes rule E[alpha | ybar, S], the posterior mean of the
+        mean alpha given the sufficient statistics (ybar, S)."""
 
 class NaiveEstimator(BayesRuleEstimator):
     """The no-shrinkage estimator"""
@@ -218,7 +218,7 @@ def _gaussian_pdf(x, mu, var):
 
 def bayes_rule(gaussian_mixture, ybar, S, m):
     """
-    Exact oracle posterior mean E[alpha | ybar, S].
+    Posterior mean E[alpha | ybar, S].
 
     Parameters
     ----------
