@@ -101,8 +101,12 @@ def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=1000, gridsize_S=100
     # Make a cvxpy variable for the pmf to find argmax of loglikelihood 
     f_variance = cp.Variable(gridsize_S)
 
-    # Compute the A matrix for the variance problem (a bunch of gamma pdfs)
-    A_variance = gamma(r, variance_grid).pdf(S)
+    # Compute the A matrix for the variance problem (a bunch of gamma pdfs).
+    # S = sum_t (y_t - ybar)^2 and S | theta ~ theta * chi^2_{m-1}
+    #   = Gamma(shape=(m-1)/2, scale=2*theta), so the per-grid-point scale is
+    #   2*variance_grid. The second positional arg to scipy's gamma is `loc`
+    #   (a shift), NOT the scale, so it must be passed as `scale=`.
+    A_variance = gamma(r, scale=2 * variance_grid).pdf(S)
     
     max_likelihood = cp.Maximize(cp.sum(cp.log(A_variance @ f_variance)))
     
@@ -173,38 +177,21 @@ def _gaussian_pdf(x, mu, var):
     return np.exp(-0.5 * (x - mu) ** 2 / var) / np.sqrt(2.0 * np.pi * var)
 
 
-def _gaussian_pdf_derivative(x, mu, var):
-    """
-    Exact derivative d/dx phi(x; mu, var).
-
-    For a Gaussian, phi'(x) = -((x - mu) / var) * phi(x).
-    """
-    # This function was AI-generated
-    return -((x - mu) / var) * _gaussian_pdf(x, mu, var)
-
-
 class OracleBayesRule(BayesRuleEstimator):
     """
-    Oracle Bayes rule for alpha under the true DGP H(alpha, theta), conditioning
-    on the FULL sufficient statistics (ybar, S) rather than ybar alone.
+    Oracle Bayes rule for alpha.
 
     Model (per unit, m draws y_t ~ N(alpha, theta)):
-        ybar = m^{-1} sum_t y_t          sufficient stat 1
-        S    = m^{-1} sum_t y_t^2        sufficient stat 2 (raw second moment)
+        ybar = m^{-1} sum_t y_t             sufficient stat 1
+        S    = sum_t (y_t - ybar)^2         sufficient stat 2 (deviation SS)
+    For which, given (alpha, theta),
+        ybar ~ N(alpha, theta/m),   S ~ theta * chi^2_{m-1},   ybar _||_ S,
+    and S depends on theta only (free of alpha).
 
-    Because S uses raw squares (not deviations from ybar), ybar and S are NOT
-    conditionally independent. The clean split uses the deviation sum of
-    squares
-        W = sum_t (y_t - ybar)^2 = m*S - m*ybar^2 = m*(S - ybar^2),
-    for which, given (alpha, theta),
-        ybar ~ N(alpha, theta/m),   W ~ theta * chi^2_{m-1},   ybar _||_ W,
-    and W depends on theta only (free of alpha). (ybar, S) <-> (ybar, W) is an
-    invertible transform, so conditioning on either carries the same info.
-
-    Decomposition (exact, no randomness):
+    Per Proposition 2, use the decomposition:
         E[alpha | ybar, S] = sum_k E[alpha | ybar, theta_k] * p(theta_k | ybar, S)
 
-    Factor 1 -- posterior mean of alpha at FIXED theta_k (homoscedastic, so the
+    Factor 1 -- posterior mean of alpha at fixed theta_k (homoscedastic, so the
     simple ratio-of-sums / Tweedie form is exact):
         E[alpha | ybar, theta_k]
             = sum_j w_{jk} alpha_j phi(ybar; alpha_j, theta_k/m)
@@ -212,19 +199,14 @@ class OracleBayesRule(BayesRuleEstimator):
     where the sum over j runs over joint support points sharing variance
     theta_k.
 
-    Factor 2 -- posterior over theta, using BOTH statistics (ybar _||_ W | theta):
+    Factor 2 -- posterior over theta, using both statistics (ybar _||_ S | theta):
         p(theta_k | ybar, S)
-            ∝ f(W | theta_k) * f(ybar | theta_k)
-            = Gamma(W; shape=(m-1)/2, scale=2 theta_k)
+            ∝ f(S | theta_k) * f(ybar | theta_k)
+            = Gamma(S; shape=(m-1)/2, scale=2 theta_k)
               * ( sum_j w_{jk} phi(ybar; alpha_j, theta_k/m) )
-    normalized over the distinct theta_k. The constant (in theta) Jacobian of
-    the (ybar, W) <-> (ybar, S) map cancels in the normalization.
-
-    Everything is a finite sum over the discrete support of H, evaluated in
-    closed form, so no RNG stream is touched. This reduces to the independent
-    /ybar-only behavior exactly when H factors and S is uninformative about
-    alpha.
+    normalized over the distinct theta_k.
     """
+    # This method was coded with Claude, hence the verbosity (math is verified by me though)
 
     def __init__(self, true_dgp: GaussianMixture, m: int) -> None:
         self.true_dgp = true_dgp
@@ -245,7 +227,7 @@ class OracleBayesRule(BayesRuleEstimator):
         self._theta_values, self._theta_index = np.unique(
             self._variances, return_inverse=True
         )
-        # Gamma parameters for W | theta: W ~ theta * chi^2_{m-1}
+        # Gamma parameters for S | theta: S ~ theta * chi^2_{m-1}
         #   => Gamma(shape=(m-1)/2, scale=2*theta).
         self._gamma_shape = (self.m - 1) / 2.0
         self._gamma_scales = 2.0 * self._theta_values  # per distinct theta
@@ -259,21 +241,19 @@ class OracleBayesRule(BayesRuleEstimator):
         ybar : scalar or array-like
             Per-unit sample mean, m^{-1} sum_t y_t.
         S : scalar or array-like
-            Per-unit raw second moment, m^{-1} sum_t y_t^2. Must broadcast
-            against `ybar`.
+            Per-unit deviation sum of squares, sum_t (y_t - ybar)^2. Must
+            broadcast against `ybar`.
 
         Returns
         -------
         ndarray (or scalar) of E[alpha | ybar, S], matching the broadcast shape
         of (ybar, S).
         """
+        # Written by Claude, with my direction about what math should be happening
+        # I had to take particular pains on Proposition 2 in the paper
+
         ybar = np.asarray(ybar, dtype=float)
         S = np.asarray(S, dtype=float)
-
-        # Deviation sum of squares recovered from (ybar, S): W = m (S - ybar^2).
-        # Clip tiny negatives from float error; W is nonnegative by construction.
-        W = self.m * (S - ybar**2)
-        W = np.maximum(W, 0.0)
 
         # Broadcast observations over the joint-support axis (last axis = K points).
         x = ybar[..., None]              # (..., 1)
@@ -308,14 +288,14 @@ class OracleBayesRule(BayesRuleEstimator):
 
         # ---- Factor 2: posterior over theta given (ybar, S) ------------------
         # f(ybar | theta_k) is exactly den_fixed (marginal of alpha at theta_k).
-        # f(W | theta_k) is the Gamma density. Prior p(theta_k) is already baked
-        # into den_fixed via the joint weights w_jk, so the unnormalized posterior
-        # is den_fixed * Gamma(W; shape, scale_k).
-        gamma_W = gamma.pdf(
-            W[..., None], a=self._gamma_shape, scale=self._gamma_scales
+        # f(S | theta_k) is the Gamma density on the deviation SS. Prior
+        # p(theta_k) is already baked into den_fixed via the joint weights w_jk,
+        # so the unnormalized posterior is den_fixed * Gamma(S; shape, scale_k).
+        gamma_S = gamma.pdf(
+            S[..., None], a=self._gamma_shape, scale=self._gamma_scales
         )  # (..., n_theta)
 
-        post_theta_unnorm = den_fixed * gamma_W  # (..., n_theta)
+        post_theta_unnorm = den_fixed * gamma_S  # (..., n_theta)
         post_norm = np.sum(post_theta_unnorm, axis=-1, keepdims=True)
         post_theta = post_theta_unnorm / post_norm  # (..., n_theta)
 
