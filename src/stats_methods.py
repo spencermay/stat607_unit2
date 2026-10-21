@@ -233,13 +233,17 @@ def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=200, gridsize_S=200)
 
 class BayesRuleEstimator(ABC):
     @abstractmethod
-    def bayes_rule(self, ybar, S) -> np.ndarray:
+    def bayes_rule(self, ybar, S, m=None) -> np.ndarray:
         """Compute the Bayes rule E[alpha | ybar, S], the posterior mean of the
-        mean alpha given the sufficient statistics (ybar, S)."""
+        mean alpha given the sufficient statistics (ybar, S).
+
+        `m` (observations per unit) is accepted by all implementations for a
+        uniform call signature; estimators that don't need it (e.g. the naive
+        rule) ignore it."""
 
 class NaiveEstimator(BayesRuleEstimator):
     """The no-shrinkage estimator"""
-    def bayes_rule(self, ybar, S):
+    def bayes_rule(self, ybar, S, m=None):
         return ybar
 
 def _gaussian_pdf(x, mu, var):

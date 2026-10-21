@@ -212,9 +212,7 @@ class Simulation():
             oracle Bayes rule expect.)
         """
         rng = np.random.default_rng(seed)
-        y = self.dgp.generate(rng, self.n, self.m)  # (n, m)
-        ybar = y.mean(axis=1)                        # (n,)
-        S = ((y - ybar[:, None]) ** 2).sum(axis=1)   # (n,) deviation SS
+        ybar, S, _alpha, _theta = self._draw(rng)
 
         # The setup id identifies the DGP setup; the seed identifies this
         # particular draw. Record both so repeated draws don't collide.
@@ -224,6 +222,27 @@ class Simulation():
         )
         _write_raw_csv(ybar, S, sim_descriptor=descriptor, fname=fname)
         return ybar, S
+
+    def _draw(self, rng):
+        """
+        Draw one trial from the true DGP and return its sufficient statistics
+        together with the latent parameters that generated them. Does NOT write
+        a CSV -- this is the lightweight primitive used inside loops (e.g. the
+        Monte Carlo metric), where per-draw file output is unwanted.
+
+        Returns
+        -------
+        ybar, S : np.ndarray, shape (n,)
+            Sufficient statistics (as in generate_statistics).
+        alpha, theta : np.ndarray, shape (n,)
+            Per-unit latent mean and variance that produced this draw.
+        """
+        y, alpha, theta = self.dgp.generate(
+            rng, self.n, self.m, return_latents=True
+        )  # (n, m), (n,), (n,)
+        ybar = y.mean(axis=1)                        # (n,)
+        S = ((y - ybar[:, None]) ** 2).sum(axis=1)   # (n,) deviation SS
+        return ybar, S, alpha, theta
 
 class IndependentMVSimulation(Simulation):
     def __init__(self,

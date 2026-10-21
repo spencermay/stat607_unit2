@@ -184,17 +184,26 @@ class GaussianMixture:
                  mixing_distribution: MixingDistribution):
         self.mixing_distribution = mixing_distribution
 
-    def generate(self, rng, n, m):
+    def generate(self, rng, n, m, return_latents=False):
         """return an (n, m) array: n units, each with m draws from a Gaussian
         whose (mean, variance) is a single draw from the mixing distribution.
 
         Each unit i draws one (alpha_i, theta_i); its m observations are
         alpha_i + sqrt(theta_i) * N(0, 1). mean/variance are length-n, so they
         broadcast over the m columns via an added trailing axis.
+
+        If return_latents is True, also return the per-unit latent (alpha,
+        theta) that generated the data, as (y, alpha, theta) with alpha, theta
+        of shape (n,). This is needed by metrics that compare an estimate of
+        alpha to the true latent alpha.
         """
         mean, variance = self.mixing_distribution.generate_mean_and_variance(rng, n)
 
         mean = np.asarray(mean).reshape(n, 1)
         variance = np.asarray(variance).reshape(n, 1)
 
-        return mean + np.sqrt(variance) * rng.normal(0, 1, (n, m))
+        y = mean + np.sqrt(variance) * rng.normal(0, 1, (n, m))
+
+        if return_latents:
+            return y, mean.reshape(n), variance.reshape(n)
+        return y
