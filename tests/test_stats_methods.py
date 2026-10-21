@@ -29,6 +29,7 @@ from stats_methods import (
     NPMLE_BayesRule,
     get_mixing_distribution_npmle,
     bayes_rule,
+    marginal_bayes_rule,
     _gaussian_pdf,
 )
 from simulation import Simulation, IndependentMVSimulation
@@ -275,3 +276,57 @@ def test_simulation_rejects_mismatched_joint_pmf_shape():
             variance_support_pts=np.array([1.0, 2.0]),     # 2 variances
             joint_pmf=np.full((2, 2), 0.25),               # wrong: should be (3, 2)
         )
+
+
+# --- marginal Bayes rule E[alpha | ybar] -----------------------------------
+
+def test_oracle_marginal_matches_closed_form():
+    """
+    marginal_bayes_rule (S integrated out over the discrete theta support)
+    equals a brute-force closed-form E[alpha | ybar] computed directly from the
+    joint support -- an independent derivation.
+    """
+    dgp, means, variances, weights = make_correlated_dgp()
+    ybar = np.array([-1.0, 0.0, 0.5, 1.5, 3.0])
+
+    # Direct E[alpha | ybar]: posterior over joint support weighted by
+    # f(ybar | alpha_k, theta_k) only (S integrated out).
+    want = np.empty_like(ybar)
+    for i in range(len(ybar)):
+        py = _gaussian_pdf(ybar[i], means, variances / M)
+        post = weights * py
+        post = post / post.sum()
+        want[i] = np.sum(post * means)
+
+    got = marginal_bayes_rule(dgp, ybar, m=M)
+    np.testing.assert_allclose(got, want, rtol=0, atol=1e-12)
+
+    # method on the oracle agrees with the module-level function
+    np.testing.assert_allclose(
+        OracleBayesRule(dgp, m=M).marginal_bayes_rule(ybar, m=M), got
+    )
+
+
+@pytest.mark.slow
+def test_npmle_marginal_runs_across_seeds():
+    """The NPMLE marginal Bayes rule fits and evaluates (finite, right shape)
+    across several seeds -- guards against solver flakiness."""
+    y_test = np.linspace(-2.0, 5.0, 30)
+
+    for seed in range(4):
+        sim = IndependentMVSimulation(
+            n=300, m=M,
+            mean_support_pts=np.array([-0.5, 1.0, 3.0]),
+            variance_support_pts=np.array([0.5, 2.0, 4.0]),
+            mean_pmf=np.full(3, 1 / 3),
+            variance_pmf=np.full(3, 1 / 3),
+        )
+        rng = np.random.default_rng(seed)
+        ybar, S = sim.generate_statistics(rng)
+
+        marg = NPMLE_BayesRule().marginal_bayes_rule(
+            ybar=ybar, S=S, m=M, y_test=y_test, m_test=M
+        )
+        marg = np.asarray(marg)
+        assert marg.shape == y_test.shape, f"seed {seed}: bad shape {marg.shape}"
+        assert np.all(np.isfinite(marg)), f"seed {seed}: non-finite output"

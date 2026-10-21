@@ -63,6 +63,36 @@ from data_generating_processes import GaussianMixture, MixIndependentMeanVarianc
 
 
 
+# Per Claude's suggestion, try a different solver for more robustness
+
+# Solvers tried, in order, for the NPMLE log-likelihood problems. SCS is a
+# robust first choice for these cp.log(A @ f) objectives (CLARABEL, the cvxpy
+# default, intermittently fails on them with near-zero densities); CLARABEL is
+# kept as a fallback since it is faster when it does converge.
+_NPMLE_SOLVERS = ("CLARABEL", "SCS")
+
+
+def _solve_npmle_problem(problem):
+    """
+    Solve a (concave-maximization) NPMLE problem robustly, trying several
+    solvers in turn. Returns when a solver reaches an optimal / inaccurate-but-
+    usable solution; raises cvxpy.error.SolverError only if every solver fails.
+    """
+    last_error = None
+    for solver in _NPMLE_SOLVERS:
+        try:
+            problem.solve(solver=solver)
+        except cp.error.SolverError as exc:
+            last_error = exc
+            continue
+        if problem.status in ("optimal", "optimal_inaccurate"):
+            return
+    raise cp.error.SolverError(
+        "NPMLE problem did not solve with any of "
+        f"{_NPMLE_SOLVERS} (last status {problem.status!r})"
+    ) from last_error
+
+
 # NPMLE by Kiefer-Wolfowitz (at least as far as I can gather from the paper)
 def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=200, gridsize_S=200):
     """
@@ -109,12 +139,14 @@ def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=200, gridsize_S=200)
     A_variance = gamma(r, scale=2 * variance_grid).pdf(S)
     
     max_likelihood = cp.Maximize(cp.sum(cp.log(A_variance.T @ f_variance)))
-    
-    constraints = [f_variance >=0, cp.sum(f_variance) == gridsize_S]
-    
+
+    # Constrain f to a proper pmf (sum == 1). This is better conditioned than
+    # sum == gridsize and the downstream code normalizes anyway.
+    constraints = [f_variance >= 0, cp.sum(f_variance) == 1]
+
     problem = cp.Problem(max_likelihood, constraints)
 
-    problem.solve()
+    _solve_npmle_problem(problem)
 
     pmf_variance = f_variance.value
 
@@ -168,12 +200,13 @@ def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=200, gridsize_S=200)
     f_mean = cp.Variable(gridsize_mean)
 
     max_likelihood = cp.Maximize(cp.sum(cp.log(A_mean.T @ f_mean)))
-    
-    constraints = [f_mean >=0, cp.sum(f_mean) == gridsize_mean]
-    
+
+    # Proper-pmf constraint (sum == 1); see the variance problem above.
+    constraints = [f_mean >= 0, cp.sum(f_mean) == 1]
+
     problem = cp.Problem(max_likelihood, constraints)
 
-    problem.solve()
+    _solve_npmle_problem(problem)
 
     pmf_mean = f_mean.value
 
@@ -472,3 +505,21 @@ class NPMLE_BayesRule(BayesRuleEstimator):
         npmle_mix = get_mixing_distribution_npmle(ybar=ybar, S=S, m=m)
 
         return bayes_rule(gaussian_mixture=npmle_mix, ybar=y_test, S=S_test, m=m_test)
+
+    def marginal_bayes_rule(self, ybar, S, m, y_test, m_test):
+        """
+        Fit the NPMLE mixing distribution from data (ybar, S, m), then evaluate
+        the S-marginal Bayes rule E[alpha | y_test] at the test ybar values.
+
+        Mirrors bayes_rule: fit on training (ybar, S, m), delegate to the
+        module-level marginal_bayes_rule using the fitted mixture.
+
+        Note: get_mixing_distribution_npmle returns a MixIndependentMeanVariance
+        (the mean and variance pmfs are estimated separately and combined as an
+        outer product), so this marginal reflects an independence-constrained
+        estimate of H -- a property of this two-stage NPMLE, not of the
+        marginalization itself.
+        """
+        npmle_mix = get_mixing_distribution_npmle(ybar=ybar, S=S, m=m)
+
+        return marginal_bayes_rule(gaussian_mixture=npmle_mix, ybar=y_test, m=m_test)
