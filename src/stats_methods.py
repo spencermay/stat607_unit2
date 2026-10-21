@@ -497,16 +497,21 @@ class OracleBayesRule(BayesRuleEstimator):
         return marginal_bayes_rule(self.true_dgp, ybar=ybar, m=m)
 
 class NPMLE_BayesRule(BayesRuleEstimator):
-    def bayes_rule(self, ybar, S, m, y_test, S_test, m_test):
+    def __init__(self, ybar, S, m):
+        self.ybar = ybar
+        self.S = S
+        self.m = m
+
+    def bayes_rule(self, ybar, S, m):
         """
         Evaluate the bayes rule given data (ybar, S, m) at the
         test point (y_test, S_test, m_test)
         """
-        npmle_mix = get_mixing_distribution_npmle(ybar=ybar, S=S, m=m)
+        npmle_mix = get_mixing_distribution_npmle(ybar=self.ybar, S=self.S, m=self.m)
 
-        return bayes_rule(gaussian_mixture=npmle_mix, ybar=y_test, S=S_test, m=m_test)
+        return bayes_rule(gaussian_mixture=npmle_mix, ybar=ybar, S=S, m=m)
 
-    def marginal_bayes_rule(self, ybar, S, m, y_test, m_test):
+    def marginal_bayes_rule(self, ybar, m):
         """
         Fit the NPMLE mixing distribution from data (ybar, S, m), then evaluate
         the S-marginal Bayes rule E[alpha | y_test] at the test ybar values.
@@ -520,6 +525,6 @@ class NPMLE_BayesRule(BayesRuleEstimator):
         estimate of H -- a property of this two-stage NPMLE, not of the
         marginalization itself.
         """
-        npmle_mix = get_mixing_distribution_npmle(ybar=ybar, S=S, m=m)
+        npmle_mix = get_mixing_distribution_npmle(ybar=self.ybar, S=self.S, m=self.m)
 
-        return marginal_bayes_rule(gaussian_mixture=npmle_mix, ybar=y_test, m=m_test)
+        return marginal_bayes_rule(gaussian_mixture=npmle_mix, ybar=ybar, m=m)

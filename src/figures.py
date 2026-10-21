@@ -20,7 +20,12 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-from simulation import IndependentMVSimulation
+from stats_methods import (
+                OracleBayesRule,
+                NPMLE_BayesRule,
+                get_mixing_distribution_npmle,
+                )
+from simulation import IndependentMVSimulation, Simulation
 
 
 # Anchor output to the project root (parent of src/) so results land in the
@@ -59,15 +64,18 @@ def save_figure(fig, name, sim_id):
 
 # --- individual panels (plot_*) --------------------------------------------
 
-def plot_true_mean_pmf(mixing_distribution, *, ax=None):
+def plot_mean_pmf(mixing_distribution, *, ax=None):
     """
-    Stem plot of the true marginal pmf of alpha (the mean mixing distribution),
+    Stem plot of the marginal pmf of alpha (the mean mixing distribution),
     collapsing the joint support onto its distinct mean values.
     """
     fig, ax = _ensure_ax(ax)
 
-    means = np.asarray(mixing_distribution.means)
-    weights = np.asarray(mixing_distribution.weights)
+    means, _variances, weights = (
+        mixing_distribution.mean_and_variance_joint_approx_pmf()
+    )
+    means = np.asarray(means)
+    weights = np.asarray(weights)
 
     unique_means = np.unique(means)
     # Total mass on each distinct mean (sum weights of joint points sharing it).
@@ -162,6 +170,27 @@ def plot_bayes_rule_marginal_on_ybar(marginal_estimate,
     return fig, ax
 
 
+def plot_compare_oracle_npmle_marginal_ybar_bayes_rule(simulation, ybar, S, m, ax=None):
+    fig, ax = _ensure_ax(ax)
+
+    oracle_estimator = OracleBayesRule(simulation.dgp, simulation.m)
+
+    plot_bayes_rule_marginal_on_ybar(marginal_estimate=lambda yb: oracle_estimator.marginal_bayes_rule(yb, simulation.m),
+                                     ybar_range=(min(ybar), max(ybar)),
+                                     ax=ax,
+                                    )
+
+    npmle_estimator = NPMLE_BayesRule(ybar, S=S, m=m)
+
+    plot_bayes_rule_marginal_on_ybar(marginal_estimate=lambda yb: npmle_estimator.marginal_bayes_rule(yb, simulation.m),
+                                     ybar_range=(min(ybar), max(ybar)),
+                                     ax=ax,
+                                    )
+
+    return fig, ax
+
+
+
 def plot_bayes_rule_contour_ybar_and_S(estimate,
                                        ybar_range,
                                        S_range,
@@ -187,7 +216,7 @@ def plot_bayes_rule_contour_ybar_and_S(estimate,
 
 # --- composite figures (figure_*) ------------------------------------------
 
-def figure_paper(simulation, ybar, *, S=None):
+def figure_paper(simulation:Simulation, ybar, S, m):
     """
     Reproduce the paper-style multi-panel figure:
       panel 0: true mean pmf (stems) with a rug of the observed ybar beneath,
@@ -198,13 +227,14 @@ def figure_paper(simulation, ybar, *, S=None):
     """
     fig, axs = plt.subplots(3)
 
-    plot_true_mean_pmf(simulation.mixing_distribution, ax=axs[0])
+    plot_mean_pmf(simulation.mixing_distribution, ax=axs[0])
+    plot_mean_pmf(get_mixing_distribution_npmle(ybar=ybar, S=S, m=m).mixing_distribution,ax=axs[0])
     plot_data_rug(ybar, ax=axs[0])
-    plot_data_rug(ybar, ax=axs[2])
 
     plot_ybar_hist(ybar, ax=axs[1])
 
-
+    plot_compare_oracle_npmle_marginal_ybar_bayes_rule(simulation=simulation, ybar=ybar, S=S, m=m, ax=axs[2])
+    plot_data_rug(ybar, ax=axs[2], ymin=-1.3, ymax=-1)
 
     fig.tight_layout()
     return fig
@@ -217,7 +247,7 @@ def make_papers_figures(simulation, seed=0):
     """
     rng = np.random.default_rng(seed)
     ybar, S = simulation.generate_statistics(rng)
-    fig = figure_paper(simulation, ybar, S=S)
+    fig = figure_paper(simulation, ybar, S=S, m=simulation.m)
     path = save_figure(fig, "paper_figures", simulation.id)
     return fig, path
 
