@@ -118,7 +118,7 @@ def _prune_pmf(support, pmf, prune_tol):
 
 
 # NPMLE by Kiefer-Wolfowitz (at least as far as I can gather from the paper)
-def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=200, gridsize_S=200,
+def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=50, gridsize_S=50,
                                   prune_tol=1e-4):
     """
     Get the NPMLE estimate of the mixing distributions for the mean/variance.

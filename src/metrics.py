@@ -146,6 +146,74 @@ def mc_mse_bayes_rule(
     return mse, mc_standard_error
 
 
+def mc_mse_both_targets(
+                simulation: Simulation,
+                make_estimator,
+                oracle_bayes_rule: OracleBayesRule,
+                *,
+                n_sim: int = 100,
+                seed: int = 0,
+                progress: bool = True,
+                ):
+    """
+    Like mc_mse_bayes_rule, but computes BOTH risk targets in a single pass --
+    one estimator fit per replicate, both comparisons.
+
+    Calling mc_mse_bayes_rule twice (target="oracle" then target="alpha") with
+    the same seed refits the estimator on identical train data twice; for the
+    NPMLE that doubles an already-slow convex solve. This fits once per
+    replicate and evaluates both targets against the same test draw, halving
+    the work.
+
+    Returns
+    -------
+    (regret_mse, regret_se), (total_mse, total_se)
+        regret_* : risk vs the oracle rule E[alpha | ybar, S].
+        total_*  : risk vs the true latent alpha.
+    Each is the mean / MC-standard-error over the n_sim replicates.
+    """
+    if n_sim < 1:
+        raise ValueError(f"n_sim must be >= 1; got {n_sim}")
+
+    m = simulation.m
+    child_seeds = np.random.SeedSequence(seed).spawn(n_sim)
+
+    regret_per_draw = np.empty(n_sim)
+    total_per_draw = np.empty(n_sim)
+    draws = tqdm(
+        enumerate(child_seeds),
+        total=n_sim,
+        disable=not progress,
+        desc="MC MSE (both targets)",
+    )
+    for k, child in draws:
+        train_seq, test_seq = child.spawn(2)
+
+        # TRAIN: fit the estimator once on an independent training draw.
+        train_rng = np.random.default_rng(train_seq)
+        train_ybar, train_S, _a, _t = simulation._draw(train_rng)
+        estimator = make_estimator(train_ybar, train_S, m)
+
+        # TEST: one fresh draw; evaluate the fitted rule and both targets here.
+        test_rng = np.random.default_rng(test_seq)
+        test_ybar, test_S, test_alpha, _tt = simulation._draw(test_rng)
+        est = np.asarray(estimator.bayes_rule(test_ybar, test_S, m))
+
+        oracle_rule = np.asarray(
+            oracle_bayes_rule.bayes_rule(test_ybar, test_S, m)
+        )
+        regret_per_draw[k] = np.mean((est - oracle_rule) ** 2)
+        total_per_draw[k] = np.mean((est - test_alpha) ** 2)
+
+    def summarize(per_draw):
+        mse = float(np.mean(per_draw))
+        if n_sim == 1:
+            return mse, float("nan")
+        return mse, float(np.std(per_draw, ddof=1) / np.sqrt(n_sim))
+
+    return summarize(regret_per_draw), summarize(total_per_draw)
+
+
 if __name__ == "__main__":
     # For the pretty formatting in the output table, thank AI.
 
@@ -227,22 +295,30 @@ if __name__ == "__main__":
     }
 
     # --- run all (setting, estimator) cells, collecting results -------------
-    results = {}  # (setting_name, est_name) -> dict of risks + n_sim
+    # Flatten into one list of (setting, estimator) cells so a single outer
+    # progress bar tracks overall completion. The inner per-draw bars are
+    # disabled (progress=False) to avoid 16 competing bars; this top-level bar
+    # shows which cell is running (runtimes vary widely -- NPMLE cells are slow).
+    cells = []  # (setting_name, sim, oracle, est_name, make_est, n_sim)
     for setting_name, sim in settings:
         oracle, estimators = build_estimators(sim)
         for est_name, make_est, n_sim in estimators:
-            regret, regret_se = mc_mse_bayes_rule(
-                sim, make_est, oracle,
-                n_sim=n_sim, seed=SEED, target="oracle", progress=False,
-            )
-            total, total_se = mc_mse_bayes_rule(
-                sim, make_est, oracle,
-                n_sim=n_sim, seed=SEED, target="alpha", progress=False,
-            )
-            results[(setting_name, est_name)] = dict(
-                regret=regret, regret_se=regret_se,
-                total=total, total_se=total_se, n_sim=n_sim,
-            )
+            cells.append((setting_name, sim, oracle, est_name, make_est, n_sim))
+
+    results = {}  # (setting_name, est_name) -> dict of risks + n_sim
+    bar = tqdm(cells, desc="Risk table", unit="cell")
+    for setting_name, sim, oracle, est_name, make_est, n_sim in bar:
+        bar.set_postfix_str(f"{setting_name}/{est_name}")
+        # Both targets in one pass: one estimator fit per replicate (halves the
+        # NPMLE solves vs calling mc_mse_bayes_rule twice).
+        (regret, regret_se), (total, total_se) = mc_mse_both_targets(
+            sim, make_est, oracle,
+            n_sim=n_sim, seed=SEED, progress=False,
+        )
+        results[(setting_name, est_name)] = dict(
+            regret=regret, regret_se=regret_se,
+            total=total, total_se=total_se, n_sim=n_sim,
+        )
 
     # --- render a labeled, self-documenting report -------------------------
     COL_EST, COL_RISK = 36, 22
