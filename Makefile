@@ -21,6 +21,9 @@ simulate: setup
 figures:
 	.venv/bin/python src/figures.py
 
+analyze:
+	.venv/bin/python src/metrics.py
+
 test: setup
 	.venv/bin/python -m pytest $(PYTEST_ARGS)
 

@@ -26,8 +26,13 @@ within a replicate share the same fitted estimator and are not independent).
 import numpy as np
 from tqdm import tqdm
 
-from simulation import Simulation
-from stats_methods import BayesRuleEstimator, OracleBayesRule
+from simulation import Simulation, IndependentMVSimulation
+from stats_methods import (
+    BayesRuleEstimator,
+    OracleBayesRule,
+    NaiveEstimator,
+    NPMLE_BayesRule,
+)
 
 
 def mc_mse_bayes_rule(
@@ -139,3 +144,148 @@ def mc_mse_bayes_rule(
             np.std(per_draw_mse, ddof=1) / np.sqrt(n_sim)
         )
     return mse, mc_standard_error
+
+
+if __name__ == "__main__":
+    # For the pretty formatting in the output table, thank AI.
+
+    # Compare the Monte Carlo risk of the naive, oracle, and NPMLE Bayes rules
+    # in two DGP settings: alpha independent of theta, and alpha positively
+    # correlated with theta. For each estimator we report both risk targets:
+    #   regret  = MSE vs the oracle rule E[alpha | ybar, S]  (target="oracle")
+    #   total   = MSE vs the true latent alpha               (target="alpha")
+    #
+    # NPMLE refits on every replicate (and the joint fit solves a convex problem
+    # taking seconds), so it uses a smaller n_sim than the closed-form rules.
+
+    SEED = 0
+    N_SIM_FAST = 100   # oracle / naive: cheap closed-form rules
+    # NPMLE refits per replicate and the JOINT fit solves a convex problem
+    # taking seconds, so keep this small. Each npmle row is
+    #   n_sim * 2 targets * 2 draws-per-replicate  convex solves; bump it up
+    # (e.g. 50-100) for a publication-quality estimate, accepting the runtime.
+    N_SIM_NPMLE = 10
+
+    mean_support = np.array([-0.5, 1.0, 3.0])
+    variance_support = np.array([0.5, 2.0, 4.0])
+
+    # Setting 1: independent alpha, theta (uniform marginals -> outer product).
+    independent_sim = IndependentMVSimulation(
+        n=400, m=11,
+        mean_support_pts=mean_support,
+        variance_support_pts=variance_support,
+        mean_pmf=np.full(3, 1 / 3),
+        variance_pmf=np.full(3, 1 / 3),
+    )
+
+    # Setting 2: positively correlated alpha, theta via a diagonal-heavy joint
+    # pmf (does NOT factor), with the same (uniform) marginals.
+    correlated_joint_pmf = np.array([
+        [0.28, 0.04, 0.01],
+        [0.04, 0.25, 0.04],
+        [0.01, 0.04, 0.29],
+    ])
+    correlated_joint_pmf = correlated_joint_pmf / correlated_joint_pmf.sum()
+    correlated_sim = Simulation(
+        n=400, m=11,
+        mean_support_pts=mean_support,
+        variance_support_pts=variance_support,
+        joint_pmf=correlated_joint_pmf,
+    )
+
+    settings = [
+        ("independent", independent_sim),
+        ("correlated", correlated_sim),
+    ]
+
+    # (name, make_estimator factory, n_sim). The NPMLE factory uses the joint
+    # fit in the correlated setting and the independent fit otherwise -- bound
+    # per setting below.
+    def build_estimators(sim):
+        oracle = OracleBayesRule(sim.dgp, m=sim.m)
+        return oracle, [
+            ("naive", lambda yb, s, m: NaiveEstimator(), N_SIM_FAST),
+            ("oracle", lambda yb, s, m: OracleBayesRule(sim.dgp, m=m), N_SIM_FAST),
+            ("npmle(indep)",
+             lambda yb, s, m: NPMLE_BayesRule(yb, s, m, assume_independent_mv=True),
+             N_SIM_NPMLE),
+            ("npmle(joint)",
+             lambda yb, s, m: NPMLE_BayesRule(yb, s, m, assume_independent_mv=False),
+             N_SIM_NPMLE),
+        ]
+
+    # Human-readable labels and descriptions for each estimator row.
+    ESTIMATOR_LABELS = {
+        "naive": "Naive (no shrinkage, alpha = ybar)",
+        "oracle": "Oracle (knows true H)",
+        "npmle(indep)": "NPMLE (independence assumed)",
+        "npmle(joint)": "NPMLE (joint alpha, theta)",
+    }
+    SETTING_LABELS = {
+        "independent": "Setting A: alpha independent of theta",
+        "correlated": "Setting B: alpha positively correlated with theta",
+    }
+
+    # --- run all (setting, estimator) cells, collecting results -------------
+    results = {}  # (setting_name, est_name) -> dict of risks + n_sim
+    for setting_name, sim in settings:
+        oracle, estimators = build_estimators(sim)
+        for est_name, make_est, n_sim in estimators:
+            regret, regret_se = mc_mse_bayes_rule(
+                sim, make_est, oracle,
+                n_sim=n_sim, seed=SEED, target="oracle", progress=False,
+            )
+            total, total_se = mc_mse_bayes_rule(
+                sim, make_est, oracle,
+                n_sim=n_sim, seed=SEED, target="alpha", progress=False,
+            )
+            results[(setting_name, est_name)] = dict(
+                regret=regret, regret_se=regret_se,
+                total=total, total_se=total_se, n_sim=n_sim,
+            )
+
+    # --- render a labeled, self-documenting report -------------------------
+    COL_EST, COL_RISK = 36, 22
+    TABLE_WIDTH = COL_EST + 2 * COL_RISK + 4
+
+    def fmt_risk(mean, se):
+        return f"{mean:.4f} ± {se:.4f}"
+
+    print()
+    print("=" * TABLE_WIDTH)
+    print("Monte Carlo risk of Bayes-rule estimators for the mean (alpha)".center(TABLE_WIDTH))
+    print("Gaussian location-scale mixture;  n = 400 units,  m = 11 obs/unit".center(TABLE_WIDTH))
+    print("=" * TABLE_WIDTH)
+    print()
+    print("Each cell is mean squared error ± Monte Carlo standard error, estimated")
+    print("out-of-sample (estimator fit on a training draw, evaluated on an")
+    print("independent test draw). Two risk measures are reported:")
+    print()
+    print("  Regret vs oracle : MSE of the estimator's rule against the oracle rule")
+    print("                     E[alpha | ybar, S]  -- excess risk from not knowing H.")
+    print("  Total vs alpha   : MSE against the true latent alpha -- total estimation risk.")
+    print()
+    print("Lower is better; the oracle attains zero regret by definition.")
+    print()
+
+    for setting_name, _sim in settings:
+        print(SETTING_LABELS[setting_name])
+        print("-" * TABLE_WIDTH)
+        print(f"{'Estimator':<{COL_EST}}  {'Regret vs oracle':<{COL_RISK}}  {'Total vs alpha':<{COL_RISK}}")
+        print("-" * TABLE_WIDTH)
+        for est_name in ESTIMATOR_LABELS:
+            res = results[(setting_name, est_name)]
+            print(
+                f"{ESTIMATOR_LABELS[est_name]:<{COL_EST}}  "
+                f"{fmt_risk(res['regret'], res['regret_se']):<{COL_RISK}}  "
+                f"{fmt_risk(res['total'], res['total_se']):<{COL_RISK}}"
+            )
+        print()
+
+    # Footnote: which rows used how many Monte Carlo replicates.
+    n_fast = results[("independent", "oracle")]["n_sim"]
+    n_npmle = results[("independent", "npmle(indep)")]["n_sim"]
+    print("-" * TABLE_WIDTH)
+    print(f"Monte Carlo replicates: closed-form rules (naive, oracle) n_sim = {n_fast};")
+    print(f"NPMLE rows n_sim = {n_npmle} (each refits per replicate, so kept smaller).")
+    print("=" * TABLE_WIDTH)
