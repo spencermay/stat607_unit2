@@ -6,6 +6,10 @@ src/__pycache__/
 results/raw/*.csv
 results/figures/*.pdf
 src/figures.py
-profiling/__pycache__/cprofiling.cpython-314.pyc
+
+profiling/__pycache__/
+
+tests/__pycache__/
+
 results/.DS_Store
 .DS_Store
