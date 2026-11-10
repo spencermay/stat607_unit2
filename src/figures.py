@@ -473,8 +473,7 @@ def make_contour_figure(simulation, seed=0):
 
 
 
-if __name__ == "__main__":
-
+def main():
     SEED = 0
 
     figure4_simulation = IndependentMVSimulation(
@@ -516,3 +515,6 @@ if __name__ == "__main__":
     )
     _, out_path = make_contour_figure(correlated_simulation, seed=SEED)
     print(f"wrote {out_path}")
+
+if __name__ == "__main__":
+    main()
