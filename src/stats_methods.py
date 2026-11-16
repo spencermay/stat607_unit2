@@ -7,70 +7,7 @@ from scipy.stats import norm, gamma, t
 from data_generating_processes import GaussianMixture, MixIndependentMeanVariance, MixJointMeanVariance, DiscreteDistribution
 
 
-# def maximize_pmf_convex(likelihood: callable,
-#                         grid_bounds: tuple,
-#                         other_estimated_pmfs: dict,
-#                         **data):
-#     """
-#     Helper function for the NPMLE estimate of the mixing distribution.
-    
-#     Maximize Integral[ 
-#                     likelihood(
-#                         this_estimate,
-#                         other_estimates,
-#                         data)
-#                     ]
-#                     d(this_estimate)
-
-#     (over all discrete pmfs supported on grid_interval with N_GRID support
-#         points equally spaced)
-    
-#     Parameters
-#     ----------
-#     likelihood: function (to be maximized) taking (other_estimates, data)
-#                 and returning a scalar
-#     other_estimates:
-#         dict(
-#             "grid": spacing,
-#             "pmf": probability mass distributed on that grid,
-#             )
-#     data:
-#         all the other variables that determine the likelihood like (S, ybar, m)
-#         for the mixture of gaussians setting.
-#     """
-
-#     grid_endpoints = (min(S / r), max(S / r))
-#     grid_start, grid_end = grid_endpoints
-#     # The pmf for variance is supported on this grid
-#     variance_grid = (np.linspace(grid_start, grid_end, num=gridsize_S)
-#                         .reshape((gridsize_S, 1)))
-
-#     # Make a cvxpy variable for the pmf to find argmax of loglikelihood 
-#     f_variance = cp.Variable(gridsize_S)
-
-#     # Compute the A matrix for the variance problem (a bunch of gamma pdfs)
-#     A_variance = gamma(r, variance_grid).pdf(S)
-    
-#     max_likelihood = cp.Maximize(cp.sum(cp.log(A_variance @ f_variance)))
-    
-#     constraints = [f_variance >=0, cp.sum(f_variance) == gridsize_S]
-    
-#     problem = cp.Problem(max_likelihood, constraints)
-
-#     problem.solve()
-
-#     pmf_variance = f_variance.value
-
-
-
-# Per Claude's suggestion, try a different solver for more robustness
-
-# Solvers tried, in order, for the NPMLE log-likelihood problems. SCS is a
-# robust first choice for these cp.log(A @ f) objectives (CLARABEL, the cvxpy
-# default, intermittently fails on them with near-zero densities); CLARABEL is
-# kept as a fallback since it is faster when it does converge.
 _NPMLE_SOLVERS = ("CLARABEL", "SCS")
-
 
 def _solve_npmle_problem(problem):
     """
@@ -81,7 +18,7 @@ def _solve_npmle_problem(problem):
     last_error = None
     for solver in _NPMLE_SOLVERS:
         try:
-            problem.solve(solver=solver)
+            problem.solve(solver=solver, verbose=True)
         except cp.error.SolverError as exc:
             last_error = exc
             continue
@@ -302,7 +239,7 @@ def get_joint_mixing_distribution_npmle(ybar, S, m,
     Returns
     -------
     GaussianMixture wrapping a MixJointMeanVariance over the (pruned) joint
-    support -- a genuine joint distribution, consumed identically to the
+    support -- a joint distribution, consumed identically to the
     independent NPMLE by bayes_rule / marginal_bayes_rule / the metrics.
     """
     ybar = np.asarray(ybar, dtype=float)
@@ -644,8 +581,6 @@ class OracleBayesRule(BayesRuleEstimator):
         ndarray (or scalar) of E[alpha | ybar, S], matching the broadcast shape
         of (ybar, S).
         """
-        # Written by Claude, with my direction about what math should be happening
-        # I had to take particular pains on Proposition 2 in the paper
 
         return bayes_rule(self.true_dgp, ybar=ybar, S=S, m=m)
 
