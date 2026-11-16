@@ -1,3 +1,7 @@
+"""
+Ensure that the optimized code is consistent with the old code.
+"""
+
 import numpy as np
 import pytest
 from scipy.stats import gamma
@@ -8,7 +12,7 @@ import sys
 
 SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 PROF = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "profiling")
-# print(SRC)
+
 for filepath in (SRC, PROF):
     if filepath not in sys.path:
         sys.path.insert(0, filepath)
