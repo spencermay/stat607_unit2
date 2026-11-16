@@ -1,6 +1,35 @@
 """
-2. Short support-reduction implementationBelow is a fixed-grid, fully corrective active-set implementation:Search every atom on your coarse grid.Add the atom with the largest score.Optimize all current support weights.Remove sufficiently small weights.It does not interpolate or optimize atom locations continuously. Its computational benefit comes from solving smaller weight problems; your coarse grid is the naive atom search you requested.
+Short support-reduction NPMLE implementation.
+
+This is a fixed-grid, fully corrective active-set implementation:
+  - Search every atom on the coarse grid.
+  - Add the atom with the largest score.
+  - Optimize all current support weights (restricted SLSQP solve).
+  - Remove sufficiently small weights.
+It does not interpolate or optimize atom locations continuously. Its
+computational benefit comes from solving smaller weight problems; the coarse
+grid is the naive atom search.
+
+Usage sketch (an adapter that mirrors get_joint_mixing_distribution_npmle and
+turns the full-grid weights into a GaussianMixture lives in
+speed_comparison_convex_solvers.py)::
+
+    fit = fit_mixture_support_reduction(A_joint)
+    print(fit["status"])
+    print("Active atoms:", len(fit["support"]))
+    print("Average-loglik gap:", fit["gap"])
+    weights = fit["weights"]
+    keep = weights > 0
+    GaussianMixture(
+        MixJointMeanVariance(alpha_atoms[keep], theta_atoms[keep], weights[keep])
+    )
 """
+
+import numpy as np
+
+from scipy_npmle_alternative import fit_mixture_weights
+
+
 def fit_mixture_support_reduction(
     A,
     gap_tol=1e-6,
@@ -104,19 +133,4 @@ def fit_mixture_support_reduction(
         "steps": steps,
         "success": gap <= gap_tol,
         "status": status,
-    }Usage:fit = fit_mixture_support_reduction(A_joint)
-
-print(fit["status"])
-print("Active atoms:", len(fit["support"]))
-print("Average-loglik gap:", fit["gap"])
-
-weights = fit["weights"]
-keep = weights > 0
-
-return GaussianMixture(
-    MixJointMeanVariance(
-        alpha_atoms[keep],
-        theta_atoms[keep],
-        weights[keep],
-    )
-)
+    }
