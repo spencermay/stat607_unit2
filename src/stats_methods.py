@@ -202,7 +202,8 @@ def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=50, gridsize_S=50,
 
 def get_joint_mixing_distribution_npmle(ybar, S, m,
                                         gridsize_mean=40, gridsize_S=40,
-                                        prune_tol=1e-4):
+                                        prune_tol=1e-4,
+                                        cvxpy_solve_wrapper=_solve_npmle_problem):
     """
     NPMLE estimate of the JOINT mixing distribution H(alpha, theta), WITHOUT
     assuming alpha and theta are independent.
@@ -270,7 +271,7 @@ def get_joint_mixing_distribution_npmle(ybar, S, m,
     max_likelihood = cp.Maximize(cp.sum(cp.log(A_joint @ f_joint)))
     constraints = [f_joint >= 0, cp.sum(f_joint) == 1]
     problem = cp.Problem(max_likelihood, constraints)
-    _solve_npmle_problem(problem)
+    cvxpy_solve_wrapper(problem)
 
     weights = np.clip(np.asarray(f_joint.value).ravel(), 0, None)
     weights = weights / weights.sum()

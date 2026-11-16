@@ -19,4 +19,6 @@ if SRC not in sys.path:
 import numpy as np
 from src.simulation import IndependentMVSimulation, Simulation
 from src.metrics import NPMLE_BayesRule
+from src.stats_methods import get_joint_mixing_distribution_npmle
+
 
