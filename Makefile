@@ -1,7 +1,7 @@
 PYTHON ?= python3
 PYTEST_ARGS ?=
 
-.PHONY: all simulate analyze figures clean test
+.PHONY: all simulate analyze figures clean test solver_benchmark
 
 all: figures
 
@@ -26,6 +26,9 @@ analyze:
 
 test: setup
 	.venv/bin/python -m pytest $(PYTEST_ARGS)
+
+solver_benchmark: setup
+	.venv/bin/python profiling/speed_comparison_convex_solvers.py
 
 clean:
 	rm -rf results/raw results/figures
