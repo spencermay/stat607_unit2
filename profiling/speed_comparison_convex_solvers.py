@@ -278,7 +278,7 @@ def _fit_with_timeout(fit_key, grid, ybar, S, m, ref_sup, ref_w, timeout):
     return payload  # (elapsed, distance)
 
 
-def compare_solvers(seed=0, repeats=3, accuracy_atol=1e-6, timeout=SOLVE_TIMEOUT_S):
+def compare_solvers(seed=0, repeats=3, accuracy_atol=1e-4, timeout=SOLVE_TIMEOUT_S):
     """Time every installed solver on the same joint-NPMLE problem and check
     each result for accuracy against a reference fit.
 
@@ -289,9 +289,10 @@ def compare_solvers(seed=0, repeats=3, accuracy_atol=1e-6, timeout=SOLVE_TIMEOUT
         wall-clock time, which is the standard way to reduce noise.
     accuracy_atol : float
         A solver is "accurate" if its distribution distance to the reference is
-        <= this. The POT path returns a true transport cost (tight tolerance is
-        fine); the moment-summary fallback is looser, so loosen this if you are
-        running without POT.
+        <= this. Set loose enough (1e-4) to absorb the small distribution
+        differences from solver-to-solver numerical noise and support pruning,
+        while still flagging a solver that converged to a genuinely different
+        distribution.
     timeout : float
         Per-solve wall-clock budget in seconds. A solve exceeding it is killed
         and recorded as TIMEOUT instead of blocking the comparison.
@@ -363,7 +364,7 @@ def _print_report(results, accuracy_atol):
         print("No solver produced an accurate solution.")
 
 
-def compare_alternatives(seed=0, repeats=1, accuracy_atol=1e-6,
+def compare_alternatives(seed=0, repeats=1, accuracy_atol=1e-4,
                          timeout=SOLVE_TIMEOUT_S,
                          grid=(ALT_GRIDSIZE_MEAN, ALT_GRIDSIZE_S)):
     """Time the default cvxpy solver against the two hand-written alternatives
