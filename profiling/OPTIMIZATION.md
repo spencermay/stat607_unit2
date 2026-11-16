@@ -17,6 +17,18 @@ Per the [cvxpy webpage](https://www.cvxpy.org/tutorial/solvers/index.html), I fo
 ['CLARABEL', 'SCS', 'SCIPY', 'HIGHS', 'OSQP']
 ```
 
+Unfortunately, when I tried seeing which of these improves the time to solve the problem (in speed_comparison_convex_solvers.py), I found that CLARABEL (the original solver)
+
+------------------------------------------------------------------------
+|solver         | best time (s) |     accuracy dist | status|
+| ---------|--------------|--------------|----------------------------------
+CLARABEL        |      7.1590 |        0.000e+00 | ok
+SCS          |             --          |      -- | TIMEOUT (exceeded 15s)
+SCIPY         |            --           |     -- | FAILED: SolverError: The solver SCIPY cannot solve this problem.
+HIGHS       |              --            |    -- | FAILED: SolverError: The solver HIGHS cannot solve this problem.
+OSQP        |              --           |     -- | FAILED: SolverError: The solver OSQP cannot solve this problem.
+------------------------------------------------------------------------
+
 ### Frank–Wolfe
 
 ### Numerical stability: log likelihood with normalization
