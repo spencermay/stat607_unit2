@@ -17,7 +17,7 @@ Per the [cvxpy webpage](https://www.cvxpy.org/tutorial/solvers/index.html), I fo
 ['CLARABEL', 'SCS', 'SCIPY', 'HIGHS', 'OSQP']
 ```
 
-Unfortunately, when I tried seeing which of these improves the time to solve the problem (in speed_comparison_convex_solvers.py), I found that CLARABEL (the original solver)
+Unfortunately, when I tried seeing which of these improves the time to solve the problem (in speed_comparison_convex_solvers.py), I found that CLARABEL (the original solver I had used) was the only viable option:
 
 ------------------------------------------------------------------------
 |solver         | best time (s) |     accuracy dist | status|
