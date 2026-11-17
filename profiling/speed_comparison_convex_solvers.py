@@ -13,6 +13,8 @@ import sys
 import time
 import multiprocessing as mp
 
+from tqdm import tqdm
+
 SOLVE_TIMEOUT_S = 15.0
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -24,27 +26,17 @@ import numpy as np
 import cvxpy as cp
 from scipy.stats import norm, gamma
 
-from stats_methods import get_joint_mixing_distribution_npmle, _prune_pmf
+from profiling.legacy_code import get_joint_mixing_distribution_npmle, _solve_npmle_problem
 from data_generating_processes import GaussianMixture, MixJointMeanVariance
 from tests.test_stats_methods import make_correlated_dgp, M
 
-# The two hand-written alternatives to the cvxpy convex solve. They take a
+# The two alternatives to the cvxpy convex solve. They take a
 # fixed likelihood matrix A and return mixture weights; the adapters below wrap
 # them with the reference's exact grid/A_joint construction so their output is
 # comparable to get_joint_mixing_distribution_npmle.
 from scipy_npmle_alternative import fit_mixture_weights
 from support_reduction_npmle_alternative import fit_mixture_support_reduction
 
-# Shared grid for the apples-to-apples alternatives comparison.
-#
-# The reference default is gridsize_mean = gridsize_S = 40 (1600 joint atoms).
-# The scipy SLSQP weight solve optimizes one variable per atom under a dense
-# equality + box constraint set, so 1600 variables is far too slow (it blows
-# past the 15s budget). We therefore run the alternatives comparison on a
-# smaller SHARED grid and fit the reference solver on that SAME grid, so the
-# accuracy distance stays meaningful (apples-to-apples). 20x20 = 400 atoms
-# keeps SLSQP tractable while staying a genuine joint NPMLE. Change both values
-# together -- never score solvers fit on different grids against each other.
 ALT_GRIDSIZE_MEAN = 20
 ALT_GRIDSIZE_S = 20
 
@@ -299,10 +291,18 @@ def compare_solvers(seed=0, repeats=3, accuracy_atol=1e-4, timeout=SOLVE_TIMEOUT
     """
     ybar, S, m = make_data(seed=seed)
 
+    print("Solving first with cvxpy's CLARABEL (slow; usually ~7s on Mac)")
     ref_sup, ref_w = _atoms_and_weights(get_joint_mixing_distribution_npmle(ybar, S, m))
+    print("Reference distribution set. Proceeding to comparison.")
 
+    solvers = cp.installed_solvers()
     results = []  # (solver, best_time_or_None, distance_or_None, status)
-    for solver in cp.installed_solvers():
+    # Progress bar on stderr (leave=False so it clears before the result table);
+    # each solve can take up to `timeout` seconds, so the bar is what tells you
+    # it is working rather than hung.
+    bar = tqdm(solvers, desc="solvers", unit="solver", leave=False, file=sys.stderr)
+    for solver in bar:
+        bar.set_postfix_str(solver)
         best_time = None
         distance = None
         status = "ok"
@@ -393,6 +393,8 @@ def compare_alternatives(seed=0, repeats=1, accuracy_atol=1e-4,
     ybar, S, m = make_data(seed=seed)
     gridsize_mean, gridsize_S = grid
 
+    print("Solving with CLARABEL (slow; usually ~7s)")
+
     # Reference baseline fit on the SHARED grid (not the 40x40 default), using
     # the default CLARABEL->SCS pipeline. Scoring against a baseline fit on a
     # different grid would make the accuracy distances meaningless.
@@ -401,6 +403,7 @@ def compare_alternatives(seed=0, repeats=1, accuracy_atol=1e-4,
             ybar, S, m, gridsize_mean=gridsize_mean, gridsize_S=gridsize_S
         )
     )
+    print("Reference distribution set. Proceeding to comparison.")
 
     # Entries: (label, kind, key). kind "solver" uses the default cvxpy
     # pipeline; kind "fit" uses one of the alternative fit callables.
@@ -412,7 +415,9 @@ def compare_alternatives(seed=0, repeats=1, accuracy_atol=1e-4,
     entries = [e for e in all_entries if e[0] in methods]
 
     results = []  # (label, best_time_or_None, distance_or_None, status)
-    for label, kind, key in entries:
+    bar = tqdm(entries, desc="methods", unit="method", leave=False, file=sys.stderr)
+    for label, kind, key in bar:
+        bar.set_postfix_str(label)
         best_time = None
         distance = None
         status = "ok"
@@ -454,7 +459,6 @@ def _default_pipeline_worker(queue, ybar, S, m, ref_sup, ref_w, grid):
     """Worker that fits with the library-default CLARABEL->SCS pipeline on the
     shared grid and scores it against the reference."""
     try:
-        from stats_methods import _solve_npmle_problem
         gridsize_mean, gridsize_S = grid
         t0 = time.perf_counter()
         fit = get_joint_mixing_distribution_npmle(
