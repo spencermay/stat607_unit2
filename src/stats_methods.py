@@ -5,6 +5,7 @@ import cvxpy as cp
 from scipy.stats import norm, gamma, t
 
 from data_generating_processes import GaussianMixture, MixIndependentMeanVariance, MixJointMeanVariance, DiscreteDistribution
+from npmle_support_reduction import fit_mixture_support_reduction
 
 
 _NPMLE_SOLVERS = ("CLARABEL", "SCS")
@@ -202,17 +203,16 @@ def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=50, gridsize_S=50,
 
 def get_joint_mixing_distribution_npmle(ybar, S, m,
                                         gridsize_mean=40, gridsize_S=40,
-                                        prune_tol=1e-4,
-                                        cvxpy_solve_wrapper=_solve_npmle_problem):
+                                        prune_tol=1e-4):
     """
     NPMLE estimate of the JOINT mixing distribution H(alpha, theta), WITHOUT
     assuming alpha and theta are independent.
 
     Unlike get_mixing_distribution_npmle -- which estimates the alpha-marginal
     and theta-marginal separately and takes their outer product (valid only
-    under independence) -- this solves one convex maximization over a single
-    joint pmf on the Cartesian grid of (alpha_k, theta_l) atoms. That joint pmf
-    need not factor, so correlated (alpha, theta) can be recovered.
+    under independence) -- this fits a single joint pmf on the Cartesian grid of
+    (alpha_k, theta_l) atoms. That joint pmf need not factor, so correlated
+    (alpha, theta) can be recovered.
 
     Likelihood of observation i under atom (alpha_k, theta_l), using the same
     sufficient-statistic factorization as the oracle (ybar _||_ S | theta):
@@ -220,11 +220,14 @@ def get_joint_mixing_distribution_npmle(ybar, S, m,
         L_i(k, l) = phi(ybar_i; alpha_k, theta_l / m)        # mean part
                     * Gamma(S_i; (m-1)/2, 2 theta_l)         # variance part
 
-    We maximize sum_i log( sum_{k,l} A[i, (k,l)] f_{kl} ) over the joint simplex
-    {f >= 0, sum f = 1}. The problem has gridsize_mean * gridsize_S variables
-    (one per joint atom) and an (n, gridsize_mean*gridsize_S) likelihood matrix,
-    so it is much heavier than the two small independent solves -- hence the
-    coarser default grid. Pruning keeps the returned support small regardless.
+    The NPMLE maximizes sum_i log( sum_{k,l} A[i, (k,l)] f_{kl} ) over the joint
+    simplex {f >= 0, sum f = 1}. We solve it with fixed-grid support reduction
+    (fit_mixture_support_reduction): a fully corrective active-set loop that
+    grows the support one atom at a time, re-optimizing the active weights with
+    an SLSQP restricted solve, rather than a single dense cvxpy convex solve.
+    The grid has gridsize_mean * gridsize_S atoms, so the full likelihood matrix
+    is (n, gridsize_mean*gridsize_S) -- hence the coarser default grid than the
+    independent version. Pruning keeps the returned support small regardless.
 
     Parameters
     ----------
@@ -266,14 +269,10 @@ def get_joint_mixing_distribution_npmle(ybar, S, m,
     var_part = gamma.pdf(S[:, None], a=r, scale=2 * theta_atoms)    # (N, P)
     A_joint = mean_part * var_part                                  # (N, P)
 
-    # Single joint convex maximization over the joint simplex.
-    f_joint = cp.Variable(n_atoms)
-    max_likelihood = cp.Maximize(cp.sum(cp.log(A_joint @ f_joint)))
-    constraints = [f_joint >= 0, cp.sum(f_joint) == 1]
-    problem = cp.Problem(max_likelihood, constraints)
-    cvxpy_solve_wrapper(problem)
-
-    weights = np.clip(np.asarray(f_joint.value).ravel(), 0, None)
+    # Fixed-grid support-reduction NPMLE over the joint simplex. Returns the
+    # full-grid weight vector (one entry per joint atom; off-support atoms = 0).
+    fit = fit_mixture_support_reduction(A_joint)
+    weights = np.clip(np.asarray(fit["weights"]).ravel(), 0, None)
     weights = weights / weights.sum()
 
     # Prune negligible joint atoms (keep alpha/theta aligned with weights).
