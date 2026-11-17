@@ -27,6 +27,9 @@ analyze:
 test: setup
 	.venv/bin/python -m pytest $(PYTEST_ARGS)
 
+profile: setup
+	.venv/bin/python profiling/cprofiling.py
+
 solver_benchmark: setup
 	.venv/bin/python profiling/speed_comparison_convex_solvers.py
 

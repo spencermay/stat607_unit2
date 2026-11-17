@@ -11,8 +11,8 @@ if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
 import numpy as np
-from src.simulation import IndependentMVSimulation, Simulation
-from src.metrics import NPMLE_BayesRule
+from simulation import IndependentMVSimulation, Simulation
+from metrics import NPMLE_BayesRule
 
 def get_cprofile(func: callable, filename:str|None=None, folder="profiling/profiles/", verbose=True):
     with Profile() as profile:
@@ -87,6 +87,6 @@ if __name__ == "__main__":
     dependent_data = generate_data_from_simulation_setup(dependent_mv_simulation_setup())
 
     get_cprofile(lambda: npmle_calculations(*independent_data, assume_independent_mv=True),
-                 filename="before_independent_calculation")
+                 filename="after_speedup_independent_calculation")
     get_cprofile(lambda: npmle_calculations(*dependent_data, assume_independent_mv=False),
-                 filename="before_dependent_calculation")
+                 filename="after_speedup_dependent_calculation")
