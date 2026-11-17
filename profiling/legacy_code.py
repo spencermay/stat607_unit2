@@ -18,6 +18,28 @@ if SRC not in sys.path:
 
 from src.data_generating_processes import GaussianMixture, MixJointMeanVariance
 
+_NPMLE_SOLVERS = ("CLARABEL", "SCS")
+
+def _solve_npmle_problem(problem):
+    """
+    Solve a (concave-maximization) NPMLE problem robustly, trying several
+    solvers in turn. Returns when a solver reaches an optimal / inaccurate-but-
+    usable solution; raises cvxpy.error.SolverError only if every solver fails.
+    """
+    last_error = None
+    for solver in _NPMLE_SOLVERS:
+        try:
+            problem.solve(solver=solver)
+        except cp.error.SolverError as exc:
+            last_error = exc
+            continue
+        if problem.status in ("optimal", "optimal_inaccurate"):
+            return
+    raise cp.error.SolverError(
+        "NPMLE problem did not solve with any of "
+        f"{_NPMLE_SOLVERS} (last status {problem.status!r})"
+    ) from last_error
+
 def get_joint_mixing_distribution_npmle(ybar, S, m,
                                         gridsize_mean=40, gridsize_S=40,
                                         prune_tol=1e-4,
