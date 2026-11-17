@@ -29,6 +29,16 @@ HIGHS       |              --            |    -- | FAILED: SolverError: The solv
 OSQP        |              --           |     -- | FAILED: SolverError: The solver OSQP cannot solve this problem.
 ------------------------------------------------------------------------
 
+So, I tried a new approach. One option is to use a naive Scipy solver (I thought, who knows, maybe it would work), and another is to use active support reduction; because I want a quick comparison, I had GPT write these implementations and I tested in speed_comparison_convex_solvers.py (on a reduced gridsize of 20x20 because 40x40 was too large):
+
+|method|time|error|within tolerance?|
+|-----|------|------|------|
+| support-reduction            |       0.0328      |   2.482e-06 | ok |
+| default (CLARABEL->SCS)      |       1.4711       |  0.000e+00 | ok |
+| scipy-SLSQP            |             5.2674    |     9.751e-06 | ok |
+
+From this, support reduction seems like a promising method.
+
 ### Frank–Wolfe
 
 ### Numerical stability: log likelihood with normalization
