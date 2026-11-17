@@ -1,5 +1,11 @@
 # Profiling and optimization for the Unit 2 project
 
+This document records the discovery process for the project. The TL;DR on the process I went through is:
+1. baseline profiling
+2. timing different cvxpy solvers
+3. timing non-cvxpy methods
+(Todo:) 4. use logscale and the logsumexp trick for numerical stability
+
 ### Baseline
 
 The first baseline profile is of the whole end-to-end figure creation script, with profile at [before__src*.prof](profiles/before__src.figures.mainf5bb7e7.prof). Even including all the figure creation steps which I was worried would muddy the picture, the main culprit is far and away the NPMLE calculation with the cvxpy CLARABEL solver.
@@ -29,6 +35,8 @@ HIGHS       |              --            |    -- | FAILED: SolverError: The solv
 OSQP        |              --           |     -- | FAILED: SolverError: The solver OSQP cannot solve this problem.
 ------------------------------------------------------------------------
 
+### Alternatives to cvxpy
+
 So, I tried a new approach. One option is to use a naive Scipy solver (I thought, who knows, maybe it would work), and another is to use active support reduction; because I want a quick comparison, I had GPT write these implementations and I tested in speed_comparison_convex_solvers.py (on a reduced gridsize of 20x20 because 40x40 was too large):
 
 |method|time|error|within tolerance?|
@@ -44,6 +52,7 @@ From this, support reduction seems like a promising method. But upping the grids
 |default (CLARABEL->SCS)       |      7.2274     |    1.500e-16 | ok|
 |support-reduction            |       0.0337     |    8.314e+00  |INACCURATE|
 
+Upon further inspection, this is because the scipy solver fails after its second iteration (I think because A is ill-conditioned).
 
 ### Numerical stability: log likelihood with normalization
 
