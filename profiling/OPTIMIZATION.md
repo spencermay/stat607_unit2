@@ -45,8 +45,6 @@ From this, support reduction seems like a promising method. But upping the grids
 |support-reduction            |       0.0337     |    8.314e+00  |INACCURATE|
 
 
-### Frank–Wolfe
-
 ### Numerical stability: log likelihood with normalization
 
 $$
