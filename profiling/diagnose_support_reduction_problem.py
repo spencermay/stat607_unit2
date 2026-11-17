@@ -1,6 +1,6 @@
 """
 Diagnostic for the support-reduction vs default NPMLE
-divergence at 40x40. Does NOT modify src/ or profiling/ behavior; it only
+divergence at 40x40. Doesn't modify src/ or profiling/ behavior; it only
 imports their helpers and runs fits.
 
 This is basically a wrapper for my old figure methods thanks to Claude.

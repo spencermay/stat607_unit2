@@ -52,13 +52,17 @@ From this, support reduction seems like a promising method. But upping the grids
 |default (CLARABEL->SCS)       |      7.2274     |    1.500e-16 | ok|
 |support-reduction            |       0.0337     |    8.314e+00  |INACCURATE|
 
-Upon further inspection, this is because the scipy solver fails after its second iteration (I think because A is ill-conditioned).
+Upon further inspection, this was because the scipy solver fails after its second iteration, because adding a new point, the weight of the new point is nearly 0. I upped this to a small constant epsilon=1e-3 and found it maintained the speedup but brought the accuracy Wasserstein metric to within 1e-4 instead of the 8 we saw above.
 
-### Numerical stability: log likelihood with normalization
+### Numerical stability: logsumexp and normalization
+
+First, as we saw in class, logsumexp can be more stable numerically when we have for instance a bunch of tiny numbers that are getting added/multiplied.
+
+Also! We can normalize the rows of the matrix A:
 
 $$
 \begin{aligned}
-\mathrm{argmin}_{f>0, \sum f_i = 1} [1.T @ log(A @ f)] &= argmin_{f>0, \sum f_i = 1} [1.T @ log(A @ f)-c log(1.T @ f)]\\
-& = argmin_{f>0, \sum f_i = 1} [1.T @ log(A @ f / 1.T @ f)]
+\mathrm{argmin}_{f>0, \sum f_i = 1} [\vec{1}.T @ log(A @ f)] & = argmin_{f>0, \sum f_i = 1} [\vec{1}.T @ log(A_{ij} f_j)-1.T @ log(\max_j(A_ij))\vec{1}]\\
+& = argmin_{f>0, \sum f_i = 1} [\vec{1}.T @ log((A_{ij}/\max_j(A_{ij})) f_j)]
 \end{aligned}
 $$
