@@ -201,7 +201,7 @@ def get_mixing_distribution_npmle(ybar, S, m, gridsize_mean=50, gridsize_S=50,
            )
 
 
-def get_joint_mixing_distribution_npmle(ybar, S, m,
+def get_joint_mixing_distribution_npmle_old(ybar, S, m,
                                         gridsize_mean=40, gridsize_S=40,
                                         prune_tol=1e-4):
     """
@@ -286,6 +286,60 @@ def get_joint_mixing_distribution_npmle(ybar, S, m,
         MixJointMeanVariance(alpha_keep, theta_keep, weights_keep)
     )
 
+def get_joint_mixing_distribution_npmle(ybar, S, m,
+                                        gridsize_mean=40, gridsize_S=40,
+                                        prune_tol=1e-4):
+    ybar = np.asarray(ybar, dtype=float)
+    S = np.asarray(S, dtype=float)
+    r = (m - 1) / 2
+
+    # Axis grids (same endpoint conventions as the independent version).
+    mean_axis = np.linspace(min(ybar), max(ybar), gridsize_mean)
+    variance_axis = np.linspace(min(S / r), max(S / r), gridsize_S)
+
+    # Flat joint atoms in C-order: atom index p = k * gridsize_S + l maps to
+    # (mean_axis[k], variance_axis[l]). This matches the flattening used
+    # elsewhere (Simulation, MixingDistribution.mean_and_variance_joint_approx_pmf).
+    alpha_atoms = np.repeat(mean_axis, gridsize_S)          # (P,)
+    theta_atoms = np.tile(variance_axis, gridsize_mean)     # (P,)
+    n_atoms = alpha_atoms.size
+    
+    logA = (
+        norm.logpdf(
+            ybar[:, None],
+            loc=alpha_atoms[None, :],
+            scale=np.sqrt(theta_atoms[None, :] / m),
+        )
+        + gamma.logpdf(
+            S[:, None],
+            a=r,
+            scale=2 * theta_atoms[None, :],
+        )
+    )
+
+    # Requires each row to have a finite maximum.
+    row_shift = np.max(logA, axis=1, keepdims=True)
+    if not np.all(np.isfinite(row_shift)):
+        raise ValueError(
+            "Some observations have no finite log likelihood on the atom grid."
+        )
+
+    A_scaled = np.exp(logA - row_shift)
+
+    fit = fit_mixture_support_reduction(A_scaled)
+    weights = np.clip(np.asarray(fit["weights"]).ravel(), 0, None)
+    weights = weights / weights.sum()
+
+    # Prune negligible joint atoms (keep alpha/theta aligned with weights).
+    keep = weights > prune_tol * weights.max() if prune_tol > 0 else slice(None)
+    alpha_keep = alpha_atoms[keep]
+    theta_keep = theta_atoms[keep]
+    weights_keep = weights[keep]
+    weights_keep = weights_keep / weights_keep.sum()
+
+    return GaussianMixture(
+        MixJointMeanVariance(alpha_keep, theta_keep, weights_keep)
+    )
 
 class BayesRuleEstimator(ABC):
     @abstractmethod
