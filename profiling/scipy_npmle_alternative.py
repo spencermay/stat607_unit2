@@ -41,7 +41,7 @@ def fit_mixture_weights(A, x0=None, ftol=1e-10, maxiter=1000, start_floor=1e-3):
         x0 /= x0.sum()
 
     def objective(w):
-        q = A @ w
+        q = np.max(A @ w, 1e-200)
         if np.any(q <= 0):
             return np.inf, np.zeros(p)
         value = -np.mean(np.log(q))

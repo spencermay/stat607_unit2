@@ -62,7 +62,7 @@ def fit_mixture_weights(A, x0=None, ftol=1e-10, maxiter=1000, start_floor=1e-5):
         x0 /= x0.sum()
 
     def objective(w):
-        q = A @ w
+        q = np.maximum(A @ w, 1e-200)
         if np.any(q <= 0):
             return np.inf, np.zeros(p)
         value = -np.mean(np.log(q))
@@ -151,7 +151,7 @@ def fit_mixture_support_reduction(
         w /= w.sum()
 
         # Naive search over the whole coarse grid.
-        q = A[:, support] @ w
+        q = np.maximum(A[:, support] @ w, 1e-200)
         g = (A.T @ (1.0 / q)) / n
         j = int(np.argmax(g))
         gap = max(0.0, float(g[j] - 1.0))
