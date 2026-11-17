@@ -8,6 +8,6 @@ trick from AI, I like it a lot and will be using it in the future.
 import os
 import sys
 
-SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
-if SRC not in sys.path:
-    sys.path.insert(0, SRC)
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)

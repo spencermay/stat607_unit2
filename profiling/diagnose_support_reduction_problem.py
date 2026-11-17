@@ -11,7 +11,7 @@ Run with the repo venv:
 import os
 import sys
 
-_ROOT = "/Users/svmay/Projects/classes/stat607/unit2/stat607_unit2"
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 for p in (_ROOT, os.path.join(_ROOT, "src"), os.path.join(_ROOT, "profiling"),
           os.path.join(_ROOT, "tests")):
     if p not in sys.path:
@@ -27,9 +27,9 @@ from speed_comparison_convex_solvers import (
     make_data, _build_joint_grid_and_A, _atoms_and_weights,
     fit_support_reduction,
 )
-from stats_methods import get_joint_mixing_distribution_npmle, _solve_npmle_problem
-from support_reduction_npmle_alternative import fit_mixture_support_reduction
-from figures import plot_support_points_ybar_and_S
+from src.stats_methods import get_joint_mixing_distribution_npmle, _solve_npmle_problem
+from profiling.support_reduction_npmle_alternative import fit_mixture_support_reduction
+from src.figures import plot_support_points_ybar_and_S
 
 OUT = "/Users/svmay/Projects/classes/stat607/unit2/stat607_unit2/profiling/diagnostic_plots/"
 

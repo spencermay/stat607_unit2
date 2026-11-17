@@ -9,12 +9,12 @@ import ot
 import os
 import sys
 
-SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
-PROF = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "profiling")
+# SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+# PROF = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "profiling")
 
-for filepath in (SRC, PROF):
-    if filepath not in sys.path:
-        sys.path.insert(0, filepath)
+# for filepath in (SRC, PROF):
+#     if filepath not in sys.path:
+#         sys.path.insert(0, filepath)
 
 from src.stats_methods import get_joint_mixing_distribution_npmle as joint_npmle_new
 from profiling.legacy_code import get_joint_mixing_distribution_npmle as joint_npmle_legacy

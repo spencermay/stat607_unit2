@@ -27,7 +27,7 @@ import cvxpy as cp
 from scipy.stats import norm, gamma
 
 from profiling.legacy_code import get_joint_mixing_distribution_npmle, _solve_npmle_problem
-from data_generating_processes import GaussianMixture, MixJointMeanVariance
+from src.data_generating_processes import GaussianMixture, MixJointMeanVariance
 from tests.test_stats_methods import make_correlated_dgp, M
 
 # The two alternatives to the cvxpy convex solve. They take a

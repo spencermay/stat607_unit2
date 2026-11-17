@@ -61,19 +61,3 @@ def fit_mixture_weights(A, x0=None, ftol=1e-10, maxiter=1000, start_floor=1e-3):
         },
         options={"ftol": ftol, "maxiter": maxiter},
     )
-    
-"""
-Use it directly:
-result = fit_mixture_weights(A_joint)
-
-if not result.success:
-    raise RuntimeError(result.message)
-
-weights = np.maximum(result.x, 0)
-weights /= weights.sum()
-
-q = A_joint @ weights
-gap = np.max(A_joint.T @ (1.0 / q)) / len(q) - 1.0
-
-For feasible weights, gap is an upper bound on the remaining improvement in average log likelihood, up to numerical error.
-"""

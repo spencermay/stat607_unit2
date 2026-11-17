@@ -19,11 +19,11 @@ import numpy as np
 import pytest
 from scipy.stats import gamma
 
-from data_generating_processes import (
+from src.data_generating_processes import (
     GaussianMixture,
     MixJointMeanVariance,
 )
-from stats_methods import (
+from src.stats_methods import (
     OracleBayesRule,
     NaiveEstimator,
     NPMLE_BayesRule,
@@ -33,7 +33,7 @@ from stats_methods import (
     marginal_bayes_rule,
     _gaussian_pdf,
 )
-from simulation import Simulation, IndependentMVSimulation
+from src.simulation import Simulation, IndependentMVSimulation
 
 
 # --- shared fixtures / helpers ---------------------------------------------
