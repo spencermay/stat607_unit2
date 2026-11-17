@@ -37,7 +37,13 @@ So, I tried a new approach. One option is to use a naive Scipy solver (I thought
 | default (CLARABEL->SCS)      |       1.4711       |  0.000e+00 | ok |
 | scipy-SLSQP            |             5.2674    |     9.751e-06 | ok |
 
-From this, support reduction seems like a promising method.
+From this, support reduction seems like a promising method. But upping the gridsize back to 40x40, the solution suddenly seems very inaccurate:
+
+|method      |                 best time (s)  |   accuracy dist  |status|
+|--------|----------|-------|-----------------------------------------------------|
+|default (CLARABEL->SCS)       |      7.2274     |    1.500e-16 | ok|
+|support-reduction            |       0.0337     |    8.314e+00  |INACCURATE|
+
 
 ### Frank–Wolfe
 

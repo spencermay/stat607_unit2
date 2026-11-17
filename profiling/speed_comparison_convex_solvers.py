@@ -364,20 +364,32 @@ def _print_report(results, accuracy_atol):
         print("No solver produced an accurate solution.")
 
 
+ALT_METHODS = ("default (CLARABEL->SCS)", "scipy-SLSQP", "support-reduction")
+
+
 def compare_alternatives(seed=0, repeats=1, accuracy_atol=1e-4,
                          timeout=SOLVE_TIMEOUT_S,
-                         grid=(ALT_GRIDSIZE_MEAN, ALT_GRIDSIZE_S)):
+                         grid=(ALT_GRIDSIZE_MEAN, ALT_GRIDSIZE_S),
+                         methods=ALT_METHODS):
     """Time the default cvxpy solver against the two hand-written alternatives
     (scipy SLSQP and support reduction) on one joint-NPMLE problem.
 
-    All three are fit on the SAME grid so the accuracy distances are comparable
+    All fits are on the SAME grid so the accuracy distances are comparable
     (apples-to-apples). The reference baseline is the default solver
     (CLARABEL->SCS pipeline via get_joint_mixing_distribution_npmle) fit on that
     same grid; every fit runs in a spawned worker under the shared `timeout`.
 
     repeats defaults to 1 here: the scipy SLSQP solve is expensive, so a single
     timed run keeps the comparison quick. Raise it for a less noisy time.
+
+    methods selects which of ALT_METHODS to run (labels, any subset, default
+    all three); pass e.g. ("default (CLARABEL->SCS)", "support-reduction") to
+    skip the slow scipy-SLSQP fit.
     """
+    unknown = [lbl for lbl in methods if lbl not in ALT_METHODS]
+    if unknown:
+        raise ValueError(f"unknown method label(s) {unknown}; choose from {ALT_METHODS}")
+
     ybar, S, m = make_data(seed=seed)
     gridsize_mean, gridsize_S = grid
 
@@ -392,11 +404,12 @@ def compare_alternatives(seed=0, repeats=1, accuracy_atol=1e-4,
 
     # Entries: (label, kind, key). kind "solver" uses the default cvxpy
     # pipeline; kind "fit" uses one of the alternative fit callables.
-    entries = [
+    all_entries = [
         ("default (CLARABEL->SCS)", "solver", None),
         ("scipy-SLSQP", "fit", "scipy-SLSQP"),
         ("support-reduction", "fit", "support-reduction"),
     ]
+    entries = [e for e in all_entries if e[0] in methods]
 
     results = []  # (label, best_time_or_None, distance_or_None, status)
     for label, kind, key in entries:
