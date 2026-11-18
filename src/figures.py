@@ -16,14 +16,18 @@ Organization
 """
 
 import os
+import sys
+import time
 
 import numpy as np
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 from stats_methods import (
                 OracleBayesRule,
                 NPMLE_BayesRule,
                 get_mixing_distribution_npmle,
+                get_joint_mixing_distribution_npmle as get_joint_mixing_distribution_npmle_new,
                 marginal_ybar_density,
                 NaiveEstimator
                 )
@@ -35,6 +39,17 @@ from simulation import IndependentMVSimulation, Simulation
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIGURES_DIR = os.path.join(_PROJECT_ROOT, "results", "figures")
 
+# The legacy (cvxpy) joint-NPMLE solver lives in profiling/ and is used only by
+# the timing-comparison figure as a benchmark. profiling.legacy_code resolves
+# off the project root; ensure it is importable regardless of the current
+# working directory (the bare `from stats_methods import ...` above works
+# because running src/figures.py puts src/ on sys.path[0]).
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+from profiling.legacy_code import (
+    get_joint_mixing_distribution_npmle as get_joint_mixing_distribution_npmle_legacy,
+)
+
 
 def _ensure_ax(ax):
     """Return (fig, ax), creating a new figure/axes if ax is None."""
@@ -45,7 +60,7 @@ def _ensure_ax(ax):
     return fig, ax
 
 
-def save_figure(fig, name, sim_id):
+def save_figure(fig, name, sim_id, extension="pdf"):
     """
     Save a figure under results/figures/ with a provenance-tagged filename.
 
@@ -59,7 +74,7 @@ def save_figure(fig, name, sim_id):
         figure can be traced back to the setup that produced it.
     """
     os.makedirs(FIGURES_DIR, exist_ok=True)
-    path = os.path.join(FIGURES_DIR, f"{name}_{sim_id}.pdf")
+    path = os.path.join(FIGURES_DIR, f"{name}_{sim_id}.{extension}")
     fig.savefig(path)
     return path
 
@@ -472,6 +487,114 @@ def make_contour_figure(simulation, seed=0):
     return fig, path
 
 
+def make_correlated_simulation():
+    """Construct the correlated (alpha, theta) Simulation used by the contour
+    and timing-comparison figures.
+
+    Correlation is encoded by a joint pmf that does NOT factor as an outer
+    product. Mass sits on the diagonal of the (alpha, theta) grid, so small
+    alpha pairs with small theta and large alpha with large theta (positive
+    dependence) -- something only the JOINT NPMLE can recover; the independent
+    fit forces Cov(alpha, theta) = 0. We use the base Simulation directly
+    (IndependentMVSimulation only accepts factorized marginals).
+    """
+    mean_support = np.array([-0.5, 1.0, 3.0])
+    variance_support = np.array([0.5, 2.0, 4.0])
+    # joint_pmf[i, j] = P(alpha = mean_support[i], theta = variance_support[j]).
+    # Diagonal-heavy -> positive correlation; small off-diagonal mass keeps the
+    # support fully explored and both marginals non-degenerate.
+    correlated_joint_pmf = np.array([
+        [0.28, 0.04, 0.01],   # alpha = -0.5 mostly with theta = 0.5
+        [0.04, 0.25, 0.04],   # alpha =  1.0 mostly with theta = 2.0
+        [0.01, 0.04, 0.29],   # alpha =  3.0 mostly with theta = 4.0
+    ])
+    correlated_joint_pmf = correlated_joint_pmf / correlated_joint_pmf.sum()
+
+    return Simulation(
+        n=400,
+        m=11,
+        mean_support_pts=mean_support,
+        variance_support_pts=variance_support,
+        joint_pmf=correlated_joint_pmf,
+    )
+
+
+# --- timing-comparison figure (standalone; NOT part of make all) -----------
+
+# Per-axis grid sizes swept by the timing comparison (total atoms = g^2).
+TIMING_GRIDSIZES = (10, 15, 20, 30, 45, 75, 100)
+
+
+def plot_solver_runtime_vs_gridsize(ybar, S, m, *, ax=None,
+                                    gridsizes=TIMING_GRIDSIZES):
+    """
+    Time the legacy (cvxpy) and new (support-reduction) joint-NPMLE solvers on
+    the SAME (ybar, S, m) data across a range of per-axis grid sizes, and plot
+    runtime (y) vs gridsize (x) with one line per solver.
+
+    Both solvers use a SQUARE grid at each swept value (gridsize_mean =
+    gridsize_S = g), so the x-axis "gridsize" is unambiguous: the per-axis grid
+    size, giving g^2 total atoms. A single timed run per solver per gridsize
+    (no averaging); only the fit call is timed, with time.perf_counter().
+
+    The gridsize sweep is wrapped in a tqdm progress bar (stderr, leave=False)
+    because the legacy cvxpy solve is slow (~7s at g=40).
+    """
+    fig, ax = _ensure_ax(ax)
+
+    gridsizes = list(gridsizes)
+    legacy_times = []
+    new_times = []
+
+    bar = tqdm(gridsizes, desc="gridsize sweep", unit="grid",
+               leave=False, file=sys.stderr)
+    for g in bar:
+        bar.set_postfix_str(f"g={g}")
+
+        t0 = time.perf_counter()
+        get_joint_mixing_distribution_npmle_legacy(
+            ybar, S, m, gridsize_mean=g, gridsize_S=g
+        )
+        legacy_times.append(time.perf_counter() - t0)
+
+        t0 = time.perf_counter()
+        get_joint_mixing_distribution_npmle_new(
+            ybar, S, m, gridsize_mean=g, gridsize_S=g
+        )
+        new_times.append(time.perf_counter() - t0)
+
+    ax.plot(gridsizes, legacy_times, marker="o",
+            label="Legacy (cvxpy)")
+    ax.plot(gridsizes, new_times, marker="s",
+            label="New (support reduction)")
+    ax.set_xlabel("gridsize (per axis; total atoms = gridsize$^2$)")
+    ax.set_ylabel("runtime (s)")
+    ax.set_yscale("log")
+    ax.set_xscale("log")
+    ax.set_title("Joint-NPMLE solver runtime vs per-axis gridsize")
+    ax.legend(loc="upper left", fontsize="small")
+    return fig, ax
+
+
+def figure_timing_comparison(simulation, seed=0):
+    """Build the runtime-vs-gridsize comparison figure from one trial of
+    `simulation`."""
+    ybar, S = simulation.generate_statistics(seed)
+    fig, _ax = plot_solver_runtime_vs_gridsize(ybar, S, simulation.m)
+    fig.tight_layout()
+    return fig
+
+
+def make_timing_comparison_figure(simulation=None, seed=0):
+    """Draw one trial from the correlated simulation (default), build the
+    runtime-vs-gridsize comparison figure, save it, and return (fig, path)."""
+    if simulation is None:
+        simulation = make_correlated_simulation()
+    fig = figure_timing_comparison(simulation, seed)
+    # Save as png so it can be displayed in Optimization.md
+    path = save_figure(fig, "timing_comparison", f"{simulation.id}_seed{seed}", extension="png")
+    return fig, path
+
 
 def main():
     SEED = 0
@@ -488,33 +611,18 @@ def main():
     print(f"wrote {out_path}")
 
     # --- Correlated (alpha, theta) DGP for the contour / joint-NPMLE figure ---
-    # Correlation is encoded by a joint pmf that does NOT factor as an outer
-    # product. Here mass sits on the diagonal of the (alpha, theta) grid, so
-    # small alpha pairs with small theta and large alpha with large theta
-    # (positive dependence) -- something only the JOINT NPMLE can recover; the
-    # independent fit forces Cov(alpha, theta) = 0. We use the base Simulation
-    # directly (IndependentMVSimulation only accepts factorized marginals).
-    mean_support = np.array([-0.5, 1.0, 3.0])
-    variance_support = np.array([0.5, 2.0, 4.0])
-    # joint_pmf[i, j] = P(alpha = mean_support[i], theta = variance_support[j]).
-    # Diagonal-heavy -> positive correlation; small off-diagonal mass keeps the
-    # support fully explored and both marginals non-degenerate.
-    correlated_joint_pmf = np.array([
-        [0.28, 0.04, 0.01],   # alpha = -0.5 mostly with theta = 0.5
-        [0.04, 0.25, 0.04],   # alpha =  1.0 mostly with theta = 2.0
-        [0.01, 0.04, 0.29],   # alpha =  3.0 mostly with theta = 4.0
-    ])
-    correlated_joint_pmf = correlated_joint_pmf / correlated_joint_pmf.sum()
-
-    correlated_simulation = Simulation(
-        n=400,
-        m=11,
-        mean_support_pts=mean_support,
-        variance_support_pts=variance_support,
-        joint_pmf=correlated_joint_pmf,
-    )
+    correlated_simulation = make_correlated_simulation()
     _, out_path = make_contour_figure(correlated_simulation, seed=SEED)
     print(f"wrote {out_path}")
 
+
 if __name__ == "__main__":
-    main()
+    # Default (no args) behavior is UNCHANGED: produce the paper + contour
+    # figures via main(). The timing comparison is opt-in only (and excluded
+    # from `make all` / `make figures`); run it with:
+    #     python src/figures.py timing_comparison
+    if len(sys.argv) > 1 and sys.argv[1] == "timing_comparison":
+        _, out_path = make_timing_comparison_figure(seed=0)
+        print(f"wrote {out_path}")
+    else:
+        main()
