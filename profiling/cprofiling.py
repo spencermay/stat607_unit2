@@ -5,10 +5,10 @@ import os
 import sys
 import subprocess
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# print(SRC)
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for filepath in (_ROOT, os.path.join(_ROOT, "src"), os.path.join(_ROOT, "tests")):
+    if filepath not in sys.path:
+        sys.path.insert(0, filepath)
 
 import numpy as np
 from src.simulation import IndependentMVSimulation, Simulation
