@@ -23,7 +23,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-from stats_methods import (
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for filepath in (_ROOT, os.path.join(_ROOT, "src"), os.path.join(_ROOT, "tests")):
+    if filepath not in sys.path:
+        sys.path.insert(0, filepath)
+
+from src.stats_methods import (
                 OracleBayesRule,
                 NPMLE_BayesRule,
                 get_mixing_distribution_npmle,
@@ -31,7 +36,7 @@ from stats_methods import (
                 marginal_ybar_density,
                 NaiveEstimator
                 )
-from simulation import IndependentMVSimulation, Simulation
+from src.simulation import IndependentMVSimulation, Simulation
 
 
 # Anchor output to the project root (parent of src/) so results land in the

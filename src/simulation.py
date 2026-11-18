@@ -9,6 +9,14 @@ import os
 
 import numpy as np
 
+import os
+import sys
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for filepath in (_ROOT, os.path.join(_ROOT, "src"), os.path.join(_ROOT, "tests")):
+    if filepath not in sys.path:
+        sys.path.insert(0, filepath)
+
 from data_generating_processes import GaussianMixture, MixJointMeanVariance
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

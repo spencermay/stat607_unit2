@@ -26,6 +26,14 @@ within a replicate share the same fitted estimator and are not independent).
 import numpy as np
 from tqdm import tqdm
 
+import os
+import sys
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for filepath in (_ROOT, os.path.join(_ROOT, "src"), os.path.join(_ROOT, "tests")):
+    if filepath not in sys.path:
+        sys.path.insert(0, filepath)
+
 from simulation import Simulation, IndependentMVSimulation
 from stats_methods import (
     BayesRuleEstimator,
