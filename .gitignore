@@ -4,7 +4,7 @@ src/__pycache__/
 .pytest_cache/
 
 results/raw/*.csv
-results/figures/*.pdf
+# results/figures/*.pdf
 src/figures.py
 
 profiling/__pycache__/

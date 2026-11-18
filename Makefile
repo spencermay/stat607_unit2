@@ -1,7 +1,7 @@
 PYTHON ?= python3
 PYTEST_ARGS ?=
 
-.PHONY: all simulate analyze figures clean test solver_benchmark create_profile profiles stop_profiles
+.PHONY: all simulate analyze figures timing_comparison clean test solver_benchmark create_profile profiles stop_profiles
 
 all: figures
 
@@ -20,6 +20,9 @@ simulate: setup
 
 figures:
 	.venv/bin/python src/figures.py
+
+timing_comparison:
+	.venv/bin/python src/figures.py timing_comparison
 
 analyze:
 	.venv/bin/python src/metrics.py
@@ -59,3 +62,4 @@ solver_benchmark: setup
 clean:
 	rm -rf results/raw results/figures
 	rm -f results/summary.csv results/paired.csv results/evaluation.json results/metrics_source.py
+	rm -rf profiling/profiles/after_speedup*
